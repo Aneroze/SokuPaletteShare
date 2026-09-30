@@ -75,6 +75,18 @@ log a warning when it's loaded.
   Replay menu lists and loads it. Full playback from the menu is not confirmed yet, because the
   harness gets stuck at frame 0 on that path for every replay, trailer or not.
 
+- **Netplay, 2 local instances** (2026-09-30; host and guest, both with
+  giuroll, driven by a small test harness):both games identify the host's
+  character as side 0 and the guest's as side 1, and compute the same hashes for the vanilla
+  palettes. Test palettes from `tools/make_test_palettes.py`: "blue Reimu" (red and blue swapped)
+  `28903696204832a202b35a5efcfffb57`, "inverted Sanae" (color negative)
+  `5aca8185dbf2e378412d158264d6781e`.
+  - Run 1 (today's behavior, each player forces only their own side): the host sees blue Reimu +
+    normal Sanae; the guest sees normal Reimu + inverted Sanae. This is the gap M2 closes.
+  - Run 2 (both games force both sides, standing in for M2): both screens show blue Reimu +
+    inverted Sanae, including palette-colored effects (Reimu's gohei streamers). The match
+    played normally.
+
 ## Open questions
 
 - Does the game reload characters on a rematch with the same characters, or reuse them? This
