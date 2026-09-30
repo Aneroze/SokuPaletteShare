@@ -1,0 +1,1 @@
+{"name":"PaletteShare","author":"Annerose","description":"See your opponent's custom palettes online (work in progress: palette load hooks + content-addressed palette cache).","version":"0.1.0","fileName":"PaletteShare.dll","main":"PaletteShare.dll","configFiles":["PaletteShare.ini"]}
