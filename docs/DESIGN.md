@@ -17,80 +17,110 @@ inspiration only. None of its code is copied.
   (`SokuLib::Palette::currentPalette`), so the colors are baked in at load time. Rollback and
   per-frame code never touch palettes.
 - Netplay and replays only carry the slot number (`skinId` / `paletteId`), never the colors.
+- Characters are created on the game's loader thread, one at a time (`0x46E6D0` → `0x46E5C0` →
+  `GameDataManager::createPlayer` `0x46DA40`), once per match. A rematch creates them again.
 
-Load path (see `src/hooks.cpp`):
+Hooks (see `src/hooks.cpp`):
 
 | Address | What |
 |---|---|
-| `0x46DE31` | character factory: `call 0x46C0B0` (thiscall on the new `v2::Player`, no stack args), **hooked** |
-| `0x46C0F7` | `call 0x4679E0(name, paletteId, ...)`: loads the character's pattern |
-| `0x467AEB` | sprintf `data/character/%s/palette%03d.bmp` (Okuu may use `...%03db.bmp`) |
-| `0x467B7D` | `call 0x408BE0`: thiscall (ecx = `0x8A0048`), args `(name, Palette*, 16)`, `ret 0xC`, **hooked** |
-| `0x41FFB7` | character-select preview uses the same loader (not hooked yet) |
+| `0x46DE31` | factory `call 0x46C0B0` (thiscall on the new `v2::Player`): remember which player is loading (thread-local) |
+| `0x467B82` | right after the palette load (`0x467B7D` `call 0x408BE0`). palette-picker jumps straight here with its own palette, so both paths meet here. Capture our own palette / apply the opponent's |
+| `0x467C43` | `TextureManager::loadTexture` per image: record (handle, path) per side, for the mid-match toggle |
+| `0x41FFBD` | character-select preview, `call getCharName` right after the preview palette load (palette-picker's preview path also meets here; edi = player, `[esp+140h]` = slot): offer our palette as we browse, show the opponent's |
+| battle scene vtables | `onRender` of Battle / BattleServer / BattleClient / BattleWatch: hotkey, late palettes |
+| IAT `0x857280` | `recvfrom`: take our packets out before the game (and giuroll at `0x41DAEA`) sees them |
+| IAT `0x857290` | `sendto`: we send through it, so relay/rewrite mods (Autopunch, InGameHostlist) see our packets |
 
-The side comes from `v2::Player::teamId` (+0x350). The palette slot is `v2::Player::paletteId`
-(+0x351). Both were verified live: Reimu left = side 0 slot 0, Sanae right = side 1 slot 1.
-
-`0x408BE0` swaps `.bmp` for `.pal` and reads through the game's file layer, so palettes replaced
-by shady-loader or by editing the data archives are what we see and hash. palette-picker patches
-0x467AEB..0x467AFF and jumps over 0x467B7D for its custom palettes, so the two mods don't mix. We
-log a warning when it's loaded.
+The side comes from `v2::Player::teamId` (+0x350), the slot from `paletteId` (+0x351). The host is
+always side 0 (`mainMode` VSCLIENT = 4), the client side 1 (VSSERVER = 5).
 
 ## Core model
 
 - **Palettes are content-addressed:** hash = first 16 bytes of SHA-256 over the serialized
-  palette (bpp byte + colors).
-- **One cache for everything:** `cache/<hash>.pal`. Every palette the game loads is stored, and
-  every palette received will be too. Loads re-verify the hash.
-- **We never need to know which palettes are "custom".** We hash what the game actually loaded
-  for the local player's character and share that.
+  palette (bpp byte + colors). `cache/<hash>.pal` holds every palette we load or receive. Loads
+  re-verify the hash.
+- **We never need to know which palettes are "custom".** We share whatever the game actually
+  shows for the local player's character.
+- **Per side, at load:** `vanilla` = what this game would show, and `custom` = the opponent's
+  palette (or a debug-forced one) after `lockTransparency`. The hotkey switches between the two by
+  re-creating that side's textures through the game's loader and swapping the D3D textures behind
+  the existing handles. 591–826 textures take ~31 ms. Game state isn't touched, so it's
+  rollback-safe.
+
+## Protocol (v1, `src/protocol.hpp`)
+
+`[0xA7]["PSHR"][version][kind][payload]` on the game's UDP socket. The game handles types 1..14
+only and drops the rest (`0x41DB04`), so peers without the mod ignore ours. Other mods' ranges:
+SokuRoll 0x10–0x17, DesyncDetector 0x20–0x21, giuroll 0x6B–0x80, Soku2 0xD3. The game's receive
+buffer is 1024 bytes, so palettes go in chunks of ≤900 bytes (16-bit: 1 packet, 32-bit: 2).
+
+- **HELLO** `{role, isReply}`: the client sends it to the host every 500 ms (up to 40 times) when
+  a netplay session starts. The host replies and learns the client's address. Version mismatch →
+  no exchange. Spectator HELLOs are ignored in v1.
+- **PALETTE** `{charId, slot, hash, totalSize, offset, len, bytes}`: our current palette, resent
+  every 500 ms until acknowledged (max 60 times). The receiver reassembles (max 4 in flight),
+  checks the sizes and hash, caches it, and records "opponent's palette for charId = (slot, hash)".
+- **ACK** `{hash}`.
+
+Offers are made from the character-select preview as the player browses, and again at load (a
+no-op if unchanged). A palette received after the opponent's character loaded is applied
+mid-match by the next battle render.
+
+## Anti-abuse
+
+- `lockTransparency`: received colors keep, index by index, exactly the transparency of the
+  palette this game would show for that slot. No invisible or translucent characters, no opaque
+  background boxes.
+- Hotkey (Ctrl+P by default) to hide or show the opponent's custom palette at any time, plus
+  `ShowOpponentPalettes` in the ini.
+- Strict packet parsing: only the two real sizes, chunks within bounds, hash verified before use.
 
 ## Milestones
 
-- [x] **M0 skeleton**: CMake + SokuLib (dev); hooks on character load and palette load;
-  side/slot detection; cache; debug `ForcePaletteLeft/Right` to exercise the swap. Verified in
-  a practice match: forcing Reimu's palette onto Sanae recolors only Sanae.
-- [ ] **M1 local palettes**: custom palettes from a folder (`.pal` / `.act` / `.bmp`) and a picker
-  at character select, so there's something custom to share. Import formats like palette-picker's.
-- [ ] **M2 netplay**: a custom packet type over the game's socket (sendto/recvfrom hooks, as
-  NetInfo does); handshake first so vanilla or giuroll peers never see unknown packets; offer
-  the hash of the palette we loaded, fetch the bytes if unknown (~513 B, one UDP packet); apply
-  them to the remote side at 0x467B7D; fall back to the normal slot if nothing arrived in time.
-  Sanitize received palettes: keep index 0 transparent and force every other index opaque.
-  Add a "show opponents' palettes" toggle.
+- [x] **M0 skeleton** (0.1.0).
+- [x] **M2 netplay** (0.9.0): exchange, palette-picker compatibility, safety, hotkey, late
+  palettes. See the tests below.
+- [ ] **1.0.0**: a two-PC test over the internet, then a public repo and a SokuLauncher listing
+  (see `docs/RELEASING.md`).
+- [ ] **M1 own picker**: custom palettes from a folder (`.pal` / `.act` / `.bmp`) and a picker at
+  character select, replacing palette-picker.
 - [ ] **M3 spectators**: the host sends both palettes to modded spectators; spectators that relay
   to other spectators (REDIRECT / CHAIN packets) pass them on from their cache.
 - [ ] **M4 replays**: after the game saves a `.rep`, append a trailer (`SOKUPAL\0`, version,
-  per-side palettes, CRC). On playback, read it and apply. Backup: a local index from
-  replay → hashes.
-- [ ] **M5 polish**: opponent's palette in the character-select preview (0x41FFB7);
-  PaletteTrueColors interplay; Soku2 / CharacterEngine characters.
+  per-side palettes, CRC). On playback, read it and apply.
+- [ ] **M5 polish**: Soku2 / CharacterEngine characters; an on-screen notice for the hotkey.
 
 ## Verified facts / tests
 
-- **.rep trailer** (2026-09-30): the game reads the input count at offset 0x77 and stops at
-  `0x7B + count*2`. Trailing data is ignored. A replay with a 1042-byte trailer played exactly
-  like the original through ReplayDnD (same tick total, 0 HP mismatches over the full match) with
-  giuroll, ReplayInputView+, ReplayHudExtras, SaveRep and ReplayLabelEx loaded. The in-game
-  Replay menu lists and loads it. Full playback from the menu is not confirmed yet, because the
-  harness gets stuck at frame 0 on that path for every replay, trailer or not.
+All netplay tests used two local instances (host and guest, both with
+giuroll), driven by a small test harness, with InGameHostlist disabled so
+nothing was advertised publicly. Test palettes come from `tools/make_test_palettes.py`: "blue
+Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "green Reimu"
+`339d4b57…fa1d`.
 
-- **Netplay, 2 local instances** (2026-09-30; host and guest, both with
-  giuroll, driven by a small test harness):both games identify the host's
-  character as side 0 and the guest's as side 1, and compute the same hashes for the vanilla
-  palettes. Test palettes from `tools/make_test_palettes.py`: "blue Reimu" (red and blue swapped)
-  `28903696204832a202b35a5efcfffb57`, "inverted Sanae" (color negative)
-  `5aca8185dbf2e378412d158264d6781e`.
-  - Run 1 (today's behavior, each player forces only their own side): the host sees blue Reimu +
-    normal Sanae; the guest sees normal Reimu + inverted Sanae. This is the gap M2 closes.
-  - Run 2 (both games force both sides, standing in for M2): both screens show blue Reimu +
-    inverted Sanae, including palette-colored effects (Reimu's gohei streamers). The match
-    played normally.
+- **.rep trailer** (2026-09-30): the game reads the input count at offset 0x77 and stops at
+  `0x7B + count*2`. Trailing data is ignored (ReplayDnD playback identical over a full match; the
+  menu lists and loads it).
+- **Exchange** (2026-10-01): host = blue Reimu from a shady-loader package, guest = inverted Sanae
+  from palette-picker 0.2b. Both screens show both custom palettes. With empty caches the bytes
+  were transferred, reassembled and hash-checked.
+- **32-bit**: the host's PaletteTrueColors palette (bpp 32, 1025 bytes) went over in 2 chunks; the
+  guest without PaletteTrueColors shows it reduced to 16-bit.
+- **Hotkey**: offline (debug force) inverted → normal → inverted mid-match. In netplay, the
+  guest's toggle only changes the guest's screen; the match continued in sync.
+- **Peers without the mod**: modded host + vanilla guest, and vanilla host + modded guest (40
+  HELLOs ignored by the host's game and giuroll); both matches ran normally.
+- **Lossy link**: 100 ms one way + 15% loss through `udp-delay.ts`: palettes were resent and
+  arrived before the characters loaded.
+- **Okuu mirror** (offline): both sides load and are identified (slots 0 and 1); the cape effect
+  is intact.
 
 ## Open questions
 
-- Does the game reload characters on a rematch with the same characters, or reuse them? This
-  decides whether the swap must happen earlier.
-- Per-node spectator limit and when the host redirects.
-- Do vanilla/giuroll peers ignore unknown packet types? The handshake-first design avoids
-  depending on it.
+- Two real PCs over the internet (NAT, Autopunch relay) — not testable from one machine.
+- Both players changing palettes at the last moment before confirming: offers replace each other
+  and the newest is resent, but this hasn't been exercised by a test.
+- The toggle temporarily writes the global palette on the render thread; the loader thread also
+  uses it. Toggles only happen in battle scenes, when the loader is idle.
+- Per-node spectator limit and when the host redirects (for M3).

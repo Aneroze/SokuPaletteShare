@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.20)
 set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-project(PaletteShare VERSION 0.1.0 LANGUAGES CXX)
+project(PaletteShare VERSION 0.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -25,10 +25,14 @@ add_library(PaletteShare MODULE
 	src/palette.cpp
 	src/hooks.hpp
 	src/hooks.cpp
+	src/net.hpp
+	src/net.cpp
+	src/protocol.hpp
+	src/protocol.cpp
 )
 target_compile_definitions(PaletteShare PRIVATE
 	NOMINMAX _CRT_SECURE_NO_WARNINGS # no WIN32_LEAN_AND_MEAN: SokuLib's headers need winsock from <windows.h>
 	PALETTESHARE_VERSION="${PROJECT_VERSION}")
 target_compile_options(PaletteShare PRIVATE /W3 /utf-8)
-target_link_libraries(PaletteShare PRIVATE SokuLib bcrypt shlwapi)
+target_link_libraries(PaletteShare PRIVATE SokuLib bcrypt shlwapi ws2_32)
 set_target_properties(PaletteShare PROPERTIES PREFIX "")

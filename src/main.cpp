@@ -3,6 +3,7 @@
 #include <string>
 #include "hooks.hpp"
 #include "log.hpp"
+#include "net.hpp"
 
 // th123.exe 1.10a
 static const BYTE TARGET_HASH[16] = {0xdf, 0x35, 0xd1, 0xfb, 0xc7, 0xb5, 0x83, 0x31, 0x7a, 0xda, 0xbe, 0x8c, 0xd9, 0xf5, 0x3b, 0x2e};
@@ -27,8 +28,28 @@ static std::string iniString(const std::filesystem::path &ini, const wchar_t *se
 	return out;
 }
 
+static int iniInt(const std::filesystem::path &ini, const wchar_t *section, const wchar_t *key, int fallback)
+{
+	auto value = iniString(ini, section, key);
+	if (value.empty())
+		return fallback;
+	try {
+		return std::stoi(value, nullptr, 0);  // accepts decimal or 0x-prefixed hex
+	} catch (...) {
+		ps::log("config: [%ls] %ls=%s is not a number, using %d", section, key, value.c_str(), fallback);
+		return fallback;
+	}
+}
+
 static void loadConfig(const std::filesystem::path &ini)
 {
+	ps::config.showOpponentPalettes = iniInt(ini, L"Display", L"ShowOpponentPalettes", 1) != 0;
+	ps::config.toggleModifier = iniInt(ini, L"Hotkey", L"Modifier", VK_CONTROL);
+	ps::config.toggleKey = iniInt(ini, L"Hotkey", L"Key", 'P');
+	ps::config.hotkeyIgnoresFocus = iniInt(ini, L"Debug", L"HotkeyIgnoresFocus", 0) != 0;
+	ps::log("config: ShowOpponentPalettes=%d hotkey modifier=0x%02X key=0x%02X",
+		ps::config.showOpponentPalettes, ps::config.toggleModifier, ps::config.toggleKey);
+
 	const wchar_t *keys[2] = {L"ForcePaletteLeft", L"ForcePaletteRight"};
 	for (int side = 0; side < 2; side++) {
 		auto value = iniString(ini, L"Debug", keys[side]);
@@ -54,12 +75,13 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 
 	auto dir = modulePath(hMyModule);
 	auto ini = dir / L"PaletteShare.ini";
-	ps::logOpen(dir / L"PaletteShare.log", GetPrivateProfileIntW(L"Debug", L"Log", 1, ini.c_str()) != 0);
+	ps::logOpen(dir / L"PaletteShare.log", GetPrivateProfileIntW(L"Debug", L"Log", 0, ini.c_str()) != 0);
 	ps::log("PaletteShare %s starting in %ls", PALETTESHARE_VERSION, dir.c_str());
 
 	ps::cache.setDirectory(dir / L"cache");
 	loadConfig(ini);
 	ps::installHooks();
+	ps::net::install();
 	return true;
 }
 

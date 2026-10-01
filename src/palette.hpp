@@ -34,6 +34,12 @@ namespace ps {
 
 	PaletteHash hashPalette(const Palette &palette);
 
+	// Anti-abuse: a palette from someone else keeps its colors but takes the transparency of
+	// `reference` (the palette this game would show without PaletteShare) index by index. So it
+	// can't make a character invisible or translucent, or turn the transparent background into a
+	// solid box.
+	Palette lockTransparency(const Palette &custom, const Palette &reference);
+
 	// Copy the palette the game currently holds / replace it (reallocating with the game's
 	// allocator when the size changes). A 32-bit palette is reduced to 16-bit when no true-color
 	// palette mod is loaded, since the game's sprite conversion would not understand it.

@@ -1,12 +1,22 @@
 #pragma once
+#include <windows.h>
 #include <optional>
 #include "palette.hpp"
 
 namespace ps {
 	struct Config {
-		// [Debug] ForcePaletteLeft / ForcePaletteRight: hash of a cached palette to force on that
-		// side at character load. Exercises the same swap path received palettes will use.
+		// [Display] ShowOpponentPalettes: start with the opponent's custom palette shown.
+		bool showOpponentPalettes = true;
+		// [Hotkey] Modifier + Key (virtual-key codes): toggle the opponent's custom palette, even
+		// mid-match. Modifier 0 = key alone.
+		int toggleModifier = VK_CONTROL;
+		int toggleKey = 'P';
+		// [Debug] ForcePaletteLeft / ForcePaletteRight: hash of a cached palette to show on that
+		// side, as if the opponent had sent it (it goes through the same checks and the hotkey).
 		std::optional<PaletteHash> forcePalette[2];
+		// [Debug] HotkeyIgnoresFocus: react to the hotkey even when the game isn't the foreground
+		// window (lets test scripts press a dummy key like F24 without stealing focus).
+		bool hotkeyIgnoresFocus = false;
 	};
 
 	extern Config config;

@@ -73,6 +73,33 @@ namespace ps {
 		return h;
 	}
 
+	static bool opaqueAt(const Palette &p, int i)
+	{
+		if (p.bpp == 16)
+			return (p.colors[i * 2 + 1] & 0x80) != 0;
+		return p.colors[i * 4 + 3] >= 0x80;
+	}
+
+	Palette lockTransparency(const Palette &custom, const Palette &reference)
+	{
+		Palette out = custom;
+		if (!custom.valid() || !reference.valid())
+			return out;
+
+		for (int i = 0; i < 256; i++) {
+			bool opaque = opaqueAt(reference, i);
+			if (out.bpp == 16) {
+				if (opaque)
+					out.colors[i * 2 + 1] |= 0x80;
+				else
+					out.colors[i * 2 + 1] &= 0x7F;
+			} else {
+				out.colors[i * 4 + 3] = opaque ? 0xFF : 0x00;
+			}
+		}
+		return out;
+	}
+
 	bool trueColorSupported()
 	{
 		// DPhoenix's mod ships as PaletteTrueColors.dll; palette-picker looks for true-color-palettes.dll.
