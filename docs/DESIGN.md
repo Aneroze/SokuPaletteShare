@@ -84,7 +84,23 @@ mid-match by the next battle render.
 - [ ] **1.0.0**: a two-PC test over the internet, then a public repo and a SokuLauncher listing
   (see `docs/RELEASING.md`).
 - [ ] **M1 own picker**: custom palettes from a folder (`.pal` / `.act` / `.bmp`) and a picker at
-  character select, replacing palette-picker.
+  character select, replacing palette-picker. Requirement (user, 2026-10-01): **the fallback must
+  be obvious.** Players without PaletteShare only get the slot number, so:
+  - every custom palette is paired with an explicit fallback slot 0–7, the slot the game actually
+    sends. It's auto-suggested as the nearest vanilla palette by color distance, can be overridden
+    per palette, and is saved with it;
+  - the picker shows the custom and fallback previews side by side ("PaletteShare users see" /
+    "others see Default 0N");
+  - in netplay, live status once the handshake settles: opponent has PaletteShare → custom,
+    doesn't → "they'll see Default 0N", unknown → checking. The same slot is what spectators and
+    replay viewers without the mod see;
+  - mirror matches: verify the game's same-slot bump rule (an offline Okuu mirror gave P2 slot 1
+    with no palette chosen; palette-picker bumps 0→1, otherwise →0) and warn live when it changes
+    our fallback;
+  - fallback previews come from the original `.dat` palettes (not shady-loader overrides),
+    checked against a built-in table of vanilla palette hashes. Flag locally modified slots.
+    Honest limit: an opponent without the mod who replaced their own slot files sees their
+    version.
 - [ ] **M3 spectators**: the host sends both palettes to modded spectators; spectators that relay
   to other spectators (REDIRECT / CHAIN packets) pass them on from their cache.
 - [ ] **M4 replays**: after the game saves a `.rep`, append a trailer (`SOKUPAL\0`, version,
