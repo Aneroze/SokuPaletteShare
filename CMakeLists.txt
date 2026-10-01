@@ -33,10 +33,14 @@ add_library(PaletteShare MODULE
 	src/library.cpp
 	src/picker.hpp
 	src/picker.cpp
+	src/ui.hpp
+	src/ui.cpp
+	src/menu.hpp
+	src/menu.cpp
 )
 target_compile_definitions(PaletteShare PRIVATE
 	NOMINMAX _CRT_SECURE_NO_WARNINGS # no WIN32_LEAN_AND_MEAN: SokuLib's headers need winsock from <windows.h>
 	PALETTESHARE_VERSION="${PROJECT_VERSION}")
 target_compile_options(PaletteShare PRIVATE /W3 /utf-8)
-target_link_libraries(PaletteShare PRIVATE SokuLib bcrypt shlwapi ws2_32)
+target_link_libraries(PaletteShare PRIVATE SokuLib bcrypt shlwapi ws2_32 shell32)
 set_target_properties(PaletteShare PROPERTIES PREFIX "")

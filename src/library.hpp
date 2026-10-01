@@ -41,6 +41,12 @@ namespace ps {
 	// Loaded (and cached) on first use; rescanned when the folder changed since.
 	const CharacterLibrary &library(int charId);
 	void rememberSelection(int charId, const std::wstring &customName, int slot);
+	// Saves a palette's own fallback slot (0-7) to palettes.ini.
+	void setFallback(int charId, const std::wstring &name, int slot);
+	// Removes a palette's own fallback: it follows the character default again.
+	void clearFallback(int charId, const std::wstring &name);
+	// The slot used by palettes without their own fallback.
+	void setDefaultFallback(int charId, int slot);
 
 	std::optional<Palette> readPaletteFile(const std::filesystem::path &file);
 }

@@ -200,6 +200,59 @@ namespace ps {
 		g_stamp[charId] = stampOf(lib.folder);  // our own write isn't a reason to rescan
 	}
 
+	void setFallback(int charId, const std::wstring &name, int slot)
+	{
+		std::lock_guard lock(g_mutex);
+		auto it = g_cache.find(charId);
+		if (it == g_cache.end() || it->second.folder.empty())
+			return;
+		auto &lib = it->second;
+		for (auto &p : lib.palettes)
+			if (p.name == name) {
+				p.fallback = slot;
+				p.fallbackIsDefault = false;
+			}
+		auto ini = (lib.folder / L"palettes.ini").wstring();
+		WritePrivateProfileStringW(name.c_str(), L"fallback", std::to_wstring(slot).c_str(), ini.c_str());
+		g_stamp[charId] = stampOf(lib.folder);
+		log("library: %ls/%ls fallback set to %d", lib.folderName.c_str(), name.c_str(), slot);
+	}
+
+	void clearFallback(int charId, const std::wstring &name)
+	{
+		std::lock_guard lock(g_mutex);
+		auto it = g_cache.find(charId);
+		if (it == g_cache.end() || it->second.folder.empty())
+			return;
+		auto &lib = it->second;
+		for (auto &p : lib.palettes)
+			if (p.name == name) {
+				p.fallback = lib.defaultFallback;
+				p.fallbackIsDefault = true;
+			}
+		auto ini = (lib.folder / L"palettes.ini").wstring();
+		WritePrivateProfileStringW(name.c_str(), L"fallback", nullptr, ini.c_str());
+		g_stamp[charId] = stampOf(lib.folder);
+		log("library: %ls/%ls fallback cleared (default %d)", lib.folderName.c_str(), name.c_str(), lib.defaultFallback);
+	}
+
+	void setDefaultFallback(int charId, int slot)
+	{
+		std::lock_guard lock(g_mutex);
+		auto it = g_cache.find(charId);
+		if (it == g_cache.end() || it->second.folder.empty())
+			return;
+		auto &lib = it->second;
+		lib.defaultFallback = slot;
+		for (auto &p : lib.palettes)
+			if (p.fallbackIsDefault)
+				p.fallback = slot;
+		auto ini = (lib.folder / L"palettes.ini").wstring();
+		WritePrivateProfileStringW(L"default", L"fallback", std::to_wstring(slot).c_str(), ini.c_str());
+		g_stamp[charId] = stampOf(lib.folder);
+		log("library: %ls default fallback set to %d", lib.folderName.c_str(), slot);
+	}
+
 	std::optional<Palette> readPaletteFile(const std::filesystem::path &file)
 	{
 		auto d = readAll(file);

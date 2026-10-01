@@ -3,6 +3,7 @@
 #include "library.hpp"
 #include "log.hpp"
 #include "net.hpp"
+#include "ui.hpp"
 #include <windows.h>
 #include <SokuLib.hpp>
 #include <map>
@@ -16,7 +17,8 @@ namespace ps::picker {
 		constexpr DWORD SETINPUTS_CALL = 0x40A45D;  // the game's only call to KeymapManager::SetInputs
 		constexpr DWORD SET_PALETTE_SELECT = 0x41FE60;  // rebuilds a player's select preview
 		constexpr int KEYINPUT_OFFSET = 0x38;
-		constexpr int OUTKEYS_OFFSET = 0x62;        // bits sent in netplay: up 1, down 2, A 16
+		constexpr int OUTKEYS_OFFSET = 0x62;        // bits sent in netplay: up 1, down 2, left 4,
+		                                            // right 8, A 16, B 32, C 64, D 128
 		constexpr int STAGE_PALETTE = 1;
 		constexpr int MAX_STEER_PRESSES = 16;       // then the slot is unreachable (mirror)
 		constexpr int STEER_TIMEOUT_FRAMES = 90;    // a press the game never applied
@@ -30,20 +32,27 @@ namespace ps::picker {
 			int index = 0;           // 0..7 vanilla slots, 8.. library palettes
 			bool previewDirty = false;
 			Steer steer = Steer::Idle;
-			int steerDir = 0;
 			int wheelAtPress = -1;
 			int waitFrames = 0;
 			int presses = 0;
 			int unreachable = -1;    // fallback slot the wheel couldn't reach (mirror match)
 			bool pendingConfirm = false;
+			bool editing = false;    // D: changing the highlighted palette's fallback
+			int editSlot = 0;
 			// what was confirmed, kept for the loading screen
 			bool confirmed = false;
 			int confirmedChar = -1;
 			std::optional<Palette> confirmedCustom;
 
 			int count() const { return 8 + static_cast<int>(lib.palettes.size()); }
+			LibraryPalette *custom() { return index >= 8 ? &lib.palettes[index - 8] : nullptr; }
 			const LibraryPalette *custom() const { return index >= 8 ? &lib.palettes[index - 8] : nullptr; }
-			int target() const { return index < 8 ? index : lib.palettes[index - 8].fallback; }
+			int target() const
+			{
+				if (index < 8)
+					return index;
+				return editing ? editSlot : lib.palettes[index - 8].fallback;
+			}
 		};
 
 		std::mutex g_mutex;  // customFor() is called from the loader thread
@@ -101,6 +110,40 @@ namespace ps::picker {
 			log("picker: palette step for char=%d, %d custom palette(s), starting at %d", charId, (int)pick.lib.palettes.size(), pick.index);
 		}
 
+		int menuMove(int axis)
+		{
+			// The game's usual feel: one step on press, then repeat while held.
+			if (axis == 1 || (axis > 24 && axis % 6 == 0))
+				return 1;
+			if (axis == -1 || (axis < -24 && -axis % 6 == 0))
+				return -1;
+			return 0;
+		}
+
+		// Edit mode: Up/Down choose the slot, D or A save, B cancels. Nothing reaches the game.
+		void driveEdit(Pick &pick, SokuLib::KeyInput &in)
+		{
+			auto custom = pick.custom();
+			if (int move = menuMove(in.verticalAxis))
+				pick.editSlot = (pick.editSlot + move + 8) % 8;
+			if (in.d == 1 || in.a == 1) {
+				pick.editing = false;
+				if (custom->fallback != pick.editSlot || custom->fallbackIsDefault) {
+					setFallback(pick.charId, custom->name, pick.editSlot);
+					custom->fallback = pick.editSlot;
+					custom->fallbackIsDefault = false;
+				}
+				pick.presses = 0;
+				pick.unreachable = -1;
+				SokuLib::playSEWaveBuffer(0x28);
+			} else if (in.b == 1) {
+				pick.editing = false;
+				pick.presses = 0;
+				pick.unreachable = -1;
+				SokuLib::playSEWaveBuffer(0x29);
+			}
+		}
+
 		// Runs once per frame after the game decoded the local player's keys.
 		void drive(SokuLib::KeymapManager *mgr)
 		{
@@ -131,23 +174,41 @@ namespace ps::picker {
 			if (!pick.active || pick.charId != charId)
 				startPick(pick, charId, wheel);
 
+			// A submenu (C: profile/deck menus) opened over the select screen gets the keys untouched.
+			if (!SokuLib::menuManager.empty()) {
+				pick.pendingConfirm = false;
+				pick.steer = Steer::Idle;
+				pick.editing = false;
+				return;
+			}
+
 			auto &in = *reinterpret_cast<SokuLib::KeyInput *>(reinterpret_cast<char *>(mgr) + KEYINPUT_OFFSET);
 			auto &bits = *reinterpret_cast<uint16_t *>(reinterpret_cast<char *>(mgr) + OUTKEYS_OFFSET);
+			bool editing = pick.editing;
 
-			// 1. Up/Down move our list (with the game's usual hold-to-repeat feel).
-			int v = in.verticalAxis;
-			int move = (v == 1 || (v > 24 && v % 6 == 0)) ? 1 : (v == -1 || (v < -24 && -v % 6 == 0)) ? -1 : 0;
-			if (move) {
-				pick.index = (pick.index + move + pick.count()) % pick.count();
-				pick.previewDirty = true;
-				pick.presses = 0;
-				pick.unreachable = -1;
-				pick.confirmed = false;
+			if (editing) {
+				driveEdit(pick, in);
+			} else {
+				// 1. Up/Down move our list.
+				if (int move = menuMove(in.verticalAxis)) {
+					pick.index = (pick.index + move + pick.count()) % pick.count();
+					pick.previewDirty = true;
+					pick.presses = 0;
+					pick.unreachable = -1;
+					pick.confirmed = false;
+				}
+				if (in.a == 1)
+					pick.pendingConfirm = true;
+				// D edits the highlighted palette's fallback (it replaces the game's random palette).
+				if (in.d == 1 && pick.custom()) {
+					pick.editing = true;
+					pick.editSlot = pick.custom()->fallback;
+					pick.pendingConfirm = false;
+					SokuLib::playSEWaveBuffer(0x28);
+				}
 			}
-			if (in.a == 1)
-				pick.pendingConfirm = true;
 
-			// 2. Steer the game's wheel to the fallback slot, one press at a time: wait until the
+			// 2. Steer the game's wheel to the target slot, one press at a time: wait until the
 			// game applied a press before the next (netplay delays our own inputs too).
 			int target = pick.target();
 			int emitV = 0;
@@ -179,7 +240,7 @@ namespace ps::picker {
 
 			// 3. Confirm only once settled, so the slot we confirm is the fallback.
 			int emitA = 0;
-			if (pick.pendingConfirm && settled) {
+			if (!pick.editing && pick.pendingConfirm && settled) {
 				emitA = 1;
 				pick.pendingConfirm = false;
 				pick.confirmed = true;
@@ -192,8 +253,16 @@ namespace ps::picker {
 
 			in.verticalAxis = emitV;
 			in.a = emitA;
-			bits &= ~(1 | 2 | 16);
+			in.d = 0;
+			bits &= ~(1 | 2 | 16 | 128);
 			bits |= (emitV < 0 ? 1 : 0) | (emitV > 0 ? 2 : 0) | (emitA ? 16 : 0);
+			if (editing) {
+				// Keep B (and the deck/submenu keys) away from the game while editing.
+				in.horizontalAxis = 0;
+				in.b = 0;
+				in.c = 0;
+				bits &= ~(4 | 8 | 32 | 64);
+			}
 		}
 
 		void __fastcall onSetInputs(void *mgr, void *edx)
@@ -203,94 +272,78 @@ namespace ps::picker {
 				drive(static_cast<SokuLib::KeymapManager *>(mgr));
 		}
 
-		// --- overlay ---------------------------------------------------------------------------
+		// --- drawing ---------------------------------------------------------------------------
 
-		class Text {
-		public:
-			void draw(const std::string &text, float x, float y)
-			{
-				if (!_font) {
-					_font = std::make_unique<SokuLib::SWRFont>();
-					_font->create();
-					SokuLib::FontDescription desc{};
-					strcpy(desc.faceName, "Tahoma");
-					desc.r1 = desc.r2 = desc.g1 = desc.g2 = 255;
-					desc.b1 = 250;
-					desc.b2 = 120;
-					desc.height = 14;
-					desc.weight = 400;
-					desc.shadow = true;
-					_font->setIndirect(desc);
-				}
-				auto &sprite = _sprites[text];
-				if (!sprite) {
-					sprite = std::make_unique<SokuLib::Sprite>();
-					int tex = 0;
-					SokuLib::textureMgr.createTextTexture(&tex, text.c_str(), *_font, 220, 18, nullptr, nullptr);
-					sprite->setTexture2(tex, 0, 0, 220, 18);
-				}
-				sprite->render(x, y);
-			}
-
-			void clear()
-			{
-				for (auto &[_, sprite] : _sprites)
-					if (sprite && sprite->dxHandle)
-						SokuLib::textureMgr.remove(sprite->dxHandle);
-				_sprites.clear();
-			}
-
-		private:
-			std::unique_ptr<SokuLib::SWRFont> _font;
-			std::map<std::string, std::unique_ptr<SokuLib::Sprite>> _sprites;
-		};
-
-		Text g_text;
-
-		std::string narrow(const std::wstring &w)
-		{
-			int n = WideCharToMultiByte(CP_ACP, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
-			std::string s(n > 0 ? n - 1 : 0, '\0');
-			WideCharToMultiByte(CP_ACP, 0, w.c_str(), -1, s.data(), n, nullptr, nullptr);
-			return s;
-		}
-
-		std::string slotName(int slot)
-		{
-			return "Default 0" + std::to_string(slot);
-		}
+		ui::Text g_text;
+		ui::PalettePreview g_customPreview[2];
+		ui::PalettePreview g_fallbackPreview[2];
 
 		std::string entryName(const Pick &pick, int index)
 		{
 			index = (index % pick.count() + pick.count()) % pick.count();
-			return index < 8 ? slotName(index) : narrow(pick.lib.palettes[index - 8].name);
+			return index < 8 ? ui::slotName(index) : ui::narrow(pick.lib.palettes[index - 8].name);
 		}
+
+		// Panel layout (in the 640x480 game frame): right of the game's own palette preview and deck
+		// box, ending above the profile-name line. Left: header, 3 list rows, 2 info lines. Right:
+		// two small previews, "You" (the custom palette) and "Others" (the fallback slot).
+		// Note: the game's text renderer treats '<' as markup, so no angle brackets in strings.
+		constexpr float PANEL_X = 132, PANEL_W = 300, PANEL_H = 96;
+		constexpr float PANEL_Y[2] = {44, 324};
+		constexpr float ROW = 14;
+		constexpr float YOU_X = 196, OTHERS_X = 258;  // preview centers, relative to the panel
+		constexpr float PREVIEW_HEIGHT = 75;
 
 		void drawPick(const Pick &pick, int player)
 		{
-			const float x = 140, y = player == 0 ? 92.f : 372.f;
-			SokuLib::MenuCursor::render(x, y, 160);
-			for (int d = -2; d <= 2; d++)
-				g_text.draw(entryName(pick, pick.index + d), x - 6 * std::abs(d), y + 18 * d);
+			const float x = PANEL_X, y = PANEL_Y[player];
+			ui::drawBox(x, y, PANEL_W, PANEL_H, 0xB0000000, 0xC0B0B0B0);
+			ui::drawBox(x + 170, y + 4, 1, PANEL_H - 8, 0x60FFFFFF, 0);
 
-			float info = y + 18 * 3 + 4;
-			g_text.draw(std::to_string(pick.index + 1) + " / " + std::to_string(pick.count()), x + 150, y - 36);
+			// Header and the list: the highlighted entry with one above and one below
+			g_text.draw("Palette  " + std::to_string(pick.index + 1) + "/" + std::to_string(pick.count()), x + 8, y + 2);
+			const float listY = y + 18 + ROW;
+			SokuLib::MenuCursor::render(x + 6, listY, 160);
+			for (int d = -1; d <= 1; d++)
+				g_text.draw(entryName(pick, pick.index + d), x + 12, listY + ROW * d);
+
+			// Previews
 			auto custom = pick.custom();
+			if (custom) {
+				int slot = pick.target();
+				g_text.draw("You", x + YOU_X - 10, y + 2);
+				g_text.draw("Others 0" + std::to_string(slot), x + OTHERS_X - 26, y + 2);
+				g_customPreview[player].showPalette(pick.charId, custom->palette, x + YOU_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
+				g_fallbackPreview[player].showSlot(pick.charId, slot, x + OTHERS_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
+			} else {
+				g_customPreview[player].clear();
+				g_fallbackPreview[player].clear();
+				g_text.draw("Same palette", x + 186, y + 30);
+				g_text.draw("for everyone", x + 186, y + 30 + ROW);
+			}
+
+			// Info lines
+			const float infoY = y + PANEL_H - 2 * ROW - 4;
 			if (!custom) {
-				g_text.draw("Vanilla palette", x, info);
+				g_text.draw("Vanilla palette", x + 8, infoY);
 				return;
 			}
-			std::string fallback = "Fallback: " + slotName(custom->fallback) + (custom->fallbackIsDefault ? " (default)" : "");
+			if (pick.editing) {
+				g_text.draw("Fallback: " + ui::slotName(pick.editSlot) + " ?", x + 8, infoY);
+				g_text.draw("Up/Down  D save  B cancel", x + 8, infoY + ROW);
+				return;
+			}
+			std::string fallback = "Fallback " + ui::slotName(custom->fallback) + (custom->fallbackIsDefault ? " (default)" : "");
 			if (pick.unreachable == custom->fallback)
-				fallback = "Fallback " + slotName(custom->fallback) + " taken: others see your slot";
-			g_text.draw(fallback, x, info);
+				fallback = ui::slotName(custom->fallback) + " is taken (mirror)";
+			g_text.draw(fallback, x + 8, infoY);
 
 			switch (net::peerStatus()) {
-			case net::PeerStatus::HasMod: g_text.draw("Opponent sees: " + narrow(custom->name), x, info + 18); break;
+			case net::PeerStatus::HasMod: g_text.draw("Opponent sees your palette", x + 8, infoY + ROW); break;
 			case net::PeerStatus::NoMod:
-			case net::PeerStatus::Incompatible: g_text.draw("Opponent sees: " + slotName(custom->fallback), x, info + 18); break;
-			case net::PeerStatus::Checking: g_text.draw("Opponent sees: checking...", x, info + 18); break;
-			default: break;
+			case net::PeerStatus::Incompatible: g_text.draw("Opponent sees " + ui::slotName(custom->fallback), x + 8, infoY + ROW); break;
+			case net::PeerStatus::Checking: g_text.draw("Opponent: checking...", x + 8, infoY + ROW); break;
+			default: g_text.draw("D: change fallback", x + 8, infoY + ROW); break;
 			}
 		}
 
@@ -320,8 +373,12 @@ namespace ps::picker {
 				int ret = orig(self);
 				if (!g_disabled && player >= 0) {
 					std::lock_guard lock(g_mutex);
-					if (g_picks[player].active)
+					if (g_picks[player].active && SokuLib::menuManager.empty())
 						drawPick(g_picks[player], player);
+					else {
+						g_customPreview[player].clear();
+						g_fallbackPreview[player].clear();
+					}
 				}
 				return ret;
 			}

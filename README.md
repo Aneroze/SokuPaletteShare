@@ -17,24 +17,32 @@ character is shown with, and the other game uses them.
   - 32-bit palettes with **PaletteTrueColors**. Opponents without PaletteTrueColors get a 16-bit
     version.
 
-## Your own palettes (picker, in development)
+## Your own palettes (picker)
 
-Put palette files in `modules\PaletteShare\palettes\<character>\` (`.pal`, `.act` or `.bmp`; the
-folder name is the game's internal one, e.g. `reimu`, `udonge`, `utsuho`; the folders are created on
-first use). At character select, Up/Down in the palette step now scroll through the 8 normal
-palettes and your own.
+Put palette files in `modules\PaletteShare\palettes\<character>\` (`.pal`, `.act` or `.bmp`). The
+folder name is the game's internal one, e.g. `reimu`, `udonge`, `utsuho`, and the folders are
+created on first use.
 
-Each palette has a **fallback**: the normal slot (0-7) your game actually sends, and so what players
-without PaletteShare (and spectators/replays) see. The picker always shows it ("Fallback: Default 03",
-or "(default)" when you haven't set one). Set it in the folder's `palettes.ini`:
+**At character select**, in the palette step:
+- Up/Down scroll through the 8 normal palettes and your own.
+- A panel shows the list, your palette (**You**) and what players without PaletteShare see
+  (**Others**), plus the palette's fallback.
+- **D** changes the highlighted palette's fallback: Up/Down pick a slot (the Others preview
+  follows), D saves, B cancels. This replaces the game's random palette in that step; D still picks
+  a random character on the character grid.
 
-```
-[default]
-fallback=0        ; for palettes without their own
-[Blue Reimu]      ; the file name without extension
-fallback=3
-```
+**The palette menu**: Profile → deck construction → choose a character → **C**. It lists that
+character's palettes with their fallbacks and large previews ("PaletteShare users see" / "Others
+see"):
+- Left/Right change the highlighted palette's fallback.
+- C returns it to the character default.
+- The "Character default" row sets the default for every palette without its own (slot 0 unless
+  changed).
+- "Open palette folder" opens the folder in Explorer.
 
+Each palette's **fallback** is the normal slot (0-7) your game actually sends. It's what players
+without PaletteShare, spectators and replays see, and the picker always shows it ("(default)" when
+it follows the character default). Changes are saved right away to the folder's `palettes.ini`.
 The picker remembers your last choice per character.
 
 ## Controls and settings (`PaletteShare.ini`)

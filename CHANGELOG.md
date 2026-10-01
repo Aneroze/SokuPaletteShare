@@ -7,6 +7,12 @@
   0) that the picker shows and steers the game to, so players without PaletteShare see exactly that
   slot. Confirm waits until the game is on the fallback slot. Last choice remembered per character.
   Turned off when palette-picker is loaded.
+- Picker layout: a compact panel next to the game's palette preview with the list, "You" and "Others"
+  previews (what players without PaletteShare see), the fallback and the opponent status.
+- D in the palette step edits the highlighted palette's fallback in place (Up/Down, D save, B cancel).
+- Palette menu (Profile, deck construction, a character, C): every palette's fallback, the character
+  default, large previews, and a shortcut to the palette folder.
+- The picker steps aside while the game's submenus are open over the select screen.
 - An opponent palette identical to the one we'd show anyway is no longer treated as custom.
 
 ## 0.9.0 (2026-10-01)

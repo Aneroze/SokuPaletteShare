@@ -146,9 +146,18 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
   and in netplay: both games hold slot 3 for the host's Reimu (`0x899D15`). A guest with
   PaletteShare shows Blue Reimu; a guest without it shows vanilla palette 3 (purple). The preview
   sprite shows the highlighted custom palette (rebuilt via `0x41FE60`).
-  Still to do for M1: overlay layout polish (it overlaps the portrait), a fallback preview sprite,
-  setting the fallback in-game (a small menu; the palette step has no spare keys), verifying the
-  mirror-match rule, fallback previews from the original `.dat`, player 2 in offline modes.
+  2026-10-01 (later): the panel (300x96 at (132,44) / (132,324)) with "You"/"Others" previews.
+  Previews are the select-screen `stand.pat` built under a palette (`ui::PalettePreview`). The
+  select effect renderer ignores `renderInfos.scale`, so we draw the pose's `SpriteEx` ourselves:
+  loadTransform, fit to a height, place by its measured bounds. The game's text renderer treats `<`
+  as markup, so strings avoid angle brackets. D edits the fallback in place (user choice: both this
+  and a menu). The palette menu hooks the deck construction menu's onProcess (vtable slot
+  `0x859878`, character at `+0xA0`, -1 on the grid). Menus read keys through `*(0x89A394)`, i.e.
+  `0x89A248`. The picker stands down while `menuManager` is non-empty (the C submenu over the
+  select screen). All verified in Practice: fallback 5 → game slot 5 → match with the custom
+  palette.
+  Still to do for M1: verifying the mirror-match rule, fallback previews from the original `.dat`,
+  player 2 in offline modes, Soku2 characters.
 
 ## Open questions
 

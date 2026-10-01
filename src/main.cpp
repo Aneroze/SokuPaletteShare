@@ -4,6 +4,7 @@
 #include "hooks.hpp"
 #include "log.hpp"
 #include "library.hpp"
+#include "menu.hpp"
 #include "net.hpp"
 #include "picker.hpp"
 
@@ -86,6 +87,7 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 	ps::installHooks();
 	ps::net::install();
 	ps::picker::install();
+	ps::menu::install();
 	return true;
 }
 
