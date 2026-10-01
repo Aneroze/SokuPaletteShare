@@ -87,8 +87,11 @@ mid-match by the next battle render.
   character select, replacing palette-picker. Requirement (user, 2026-10-01): **the fallback must
   be obvious.** Players without PaletteShare only get the slot number, so:
   - every custom palette is paired with an explicit fallback slot 0–7, the slot the game actually
-    sends. It's auto-suggested as the nearest vanilla palette by color distance, can be overridden
-    per palette, and is saved with it;
+    sends. **The player sets it directly; there is no automatic choice or hidden default**
+    (user decision, 2026-10-01). It's saved with the palette. A palette with no fallback yet shows
+    "Fallback: not set" and can't be confirmed until the player picks one, right there in the
+    picker (cycling slots with the fallback preview updating). It can be changed later at any
+    time;
   - the picker shows the custom and fallback previews side by side ("PaletteShare users see" /
     "others see Default 0N");
   - in netplay, live status once the handshake settles: opponent has PaletteShare → custom,
