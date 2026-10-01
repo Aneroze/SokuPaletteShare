@@ -83,7 +83,7 @@ mid-match by the next battle render.
   palettes. See the tests below.
 - [ ] **1.0.0**: a two-PC test over the internet, then a public repo and a SokuLauncher listing
   (see `docs/RELEASING.md`).
-- [ ] **M1 own picker**: custom palettes from a folder (`.pal` / `.act` / `.bmp`) and a picker at
+- [ ] **M1 own picker** (first version working 2026-10-01, see below): custom palettes from a folder (`.pal` / `.act` / `.bmp`) and a picker at
   character select, replacing palette-picker. Requirement (user, 2026-10-01): **the fallback must
   be obvious.** Players without PaletteShare only get the slot number, so:
   - every custom palette is paired with an explicit fallback slot 0–7, the slot the game actually
@@ -136,6 +136,19 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
   arrived before the characters loaded.
 - **Okuu mirror** (offline): both sides load and are identified (slots 0 and 1); the cape effect
   is intact.
+
+- **Picker** (2026-10-01): the palette step is selection stage 1 (`Select+0x22C0/1`). Palette
+  cursors are `leftPalInput` (+0x164) and `rightPalInput` (+0x18C), wheels of 8 moved by Up/Down.
+  Left/Right = deck, C = profile submenu, D = random, so there's no free key. We drive the wheel
+  through the local menu KeymapManager (`0x8986A8`) at the SetInputs call site `0x40A45D`: the
+  decoded input at +0x38 plus the netcode bits at +0x62. One press at a time, waiting until the game
+  applied it. Verified offline (Blue Reimu fallback 3 → wheel 3; Green Reimu default 0 → wheel 0)
+  and in netplay: both games hold slot 3 for the host's Reimu (`0x899D15`). A guest with
+  PaletteShare shows Blue Reimu; a guest without it shows vanilla palette 3 (purple). The preview
+  sprite shows the highlighted custom palette (rebuilt via `0x41FE60`).
+  Still to do for M1: overlay layout polish (it overlaps the portrait), a fallback preview sprite,
+  setting the fallback in-game (a small menu; the palette step has no spare keys), verifying the
+  mirror-match rule, fallback previews from the original `.dat`, player 2 in offline modes.
 
 ## Open questions
 

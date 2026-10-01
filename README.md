@@ -17,6 +17,26 @@ character is shown with, and the other game uses them.
   - 32-bit palettes with **PaletteTrueColors**. Opponents without PaletteTrueColors get a 16-bit
     version.
 
+## Your own palettes (picker, in development)
+
+Put palette files in `modules\PaletteShare\palettes\<character>\` (`.pal`, `.act` or `.bmp`; the
+folder name is the game's internal one, e.g. `reimu`, `udonge`, `utsuho`; the folders are created on
+first use). At character select, Up/Down in the palette step now scroll through the 8 normal
+palettes and your own.
+
+Each palette has a **fallback**: the normal slot (0-7) your game actually sends, and so what players
+without PaletteShare (and spectators/replays) see. The picker always shows it ("Fallback: Default 03",
+or "(default)" when you haven't set one). Set it in the folder's `palettes.ini`:
+
+```
+[default]
+fallback=0        ; for palettes without their own
+[Blue Reimu]      ; the file name without extension
+fallback=3
+```
+
+The picker remembers your last choice per character.
+
 ## Controls and settings (`PaletteShare.ini`)
 
 - **Ctrl+P** toggles your opponent's custom palette on and off at any time, including mid-match.

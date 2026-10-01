@@ -1,6 +1,7 @@
 #include "hooks.hpp"
 #include "log.hpp"
 #include "net.hpp"
+#include "picker.hpp"
 #include <windows.h>
 #include <SokuLib.hpp>
 #include <mutex>
@@ -60,6 +61,16 @@ namespace ps {
 		int *(__fastcall *orig_loadTexture)(void *mgr, void *edx, int *ret, LPCSTR path, void *w, void *h) = nullptr;
 		DWORD orig_getCharName = 0;
 
+		// The side whose palette the local player picks: our side in netplay, player 1 in offline
+		// modes, none when watching (replays, spectating).
+		int pickerSide()
+		{
+			if (SokuLib::subMode == SokuLib::BATTLE_SUBMODE_REPLAY || SokuLib::mainMode == SokuLib::BATTLE_MODE_VSWATCH)
+				return -1;
+			int local = net::localSide();
+			return local >= 0 ? local : 0;
+		}
+
 		int remoteSide()
 		{
 			int local = net::localSide();
@@ -82,7 +93,10 @@ namespace ps {
 				log("  side=%d: palette %s missing from the cache", side, hash->hex().c_str());
 				return std::nullopt;
 			}
-			return lockTransparency(*palette, reference);
+			auto checked = lockTransparency(*palette, reference);
+			if (hashPalette(checked) == hashPalette(reference))
+				return std::nullopt;  // the opponent uses the same palette we'd show anyway
+			return checked;
 		}
 
 		// Re-create the side's textures with `palette` and swap them in behind the same handles.
@@ -146,6 +160,12 @@ namespace ps {
 			side = Side{};
 			side.charId = player->characterIndex;
 			side.slot = player->paletteId;
+			if (index == pickerSide()) {
+				if (auto mine = picker::customFor(index, side.charId)) {
+					writeGamePalette(*mine, palette);
+					log("load side=%d: our picked custom palette (game slot %d is the fallback)", index, side.slot);
+				}
+			}
 			side.vanilla = readGamePalette(palette);
 			if (!side.vanilla.valid()) {
 				log("load side=%d char=%d slot=%d: palette unreadable (bpp=%d)", index, side.charId, side.slot, (int)palette.bitsPerPixel);
@@ -185,11 +205,18 @@ namespace ps {
 		// Character select: currentPalette holds the palette of the preview about to be built.
 		void __cdecl onPreview(int charId, int playerId, int slot)
 		{
+			if (playerId < 0 || playerId > 1)
+				return;
 			int local = net::localSide();
-			if (local < 0 || playerId < 0 || playerId > 1)
+			auto &palette = SokuLib::Palette::currentPalette;
+
+			if (playerId == (SokuLib::sceneId == SokuLib::SCENE_SELECT ? 0 : local)) {
+				if (auto mine = picker::customFor(playerId, charId))
+					writeGamePalette(*mine, palette);
+			}
+			if (local < 0)
 				return;
 
-			auto &palette = SokuLib::Palette::currentPalette;
 			auto current = readGamePalette(palette);
 			if (!current.valid())
 				return;

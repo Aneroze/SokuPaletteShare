@@ -24,6 +24,7 @@ namespace ps::net {
 		constexpr ULONGLONG OFFER_INTERVAL_MS = 500;
 		constexpr int OFFER_MAX_SENDS = 60;       // resend until acked, up to ~30 s
 		constexpr size_t MAX_PENDING = 4;
+		constexpr ULONGLONG NO_MOD_AFTER_MS = 3000;  // no HELLO by then: show "they don't have it"
 
 		using RecvFrom = int (__stdcall *)(SOCKET, char *, int, int, sockaddr *, int *);
 		using SendTo = int (__stdcall *)(SOCKET, const char *, int, int, const sockaddr *, int);
@@ -60,6 +61,7 @@ namespace ps::net {
 		bool g_peerIncompatible = false;
 		sockaddr_in g_peer{};
 		int g_helloTries = 0;
+		ULONGLONG g_sessionStart = 0;
 		ULONGLONG g_nextHello = 0;
 		std::optional<Offer> g_offer;
 		std::map<std::array<uint8_t, 16>, Pending> g_pending;
@@ -254,6 +256,7 @@ namespace ps::net {
 					g_offer = std::move(offer);
 				}
 				g_inSession = session;
+				g_sessionStart = GetTickCount64();
 				log("net: %s netplay session", session ? "entered" : "left");
 			}
 			if (!g_inSession || g_peerIncompatible)
@@ -312,6 +315,18 @@ namespace ps::net {
 		if (it == g_remote.end() || it->second.slot != slot)
 			return std::nullopt;
 		return it->second.hash;
+	}
+
+	PeerStatus peerStatus()
+	{
+		std::lock_guard lock(g_mutex);
+		if (!g_inSession)
+			return PeerStatus::NotInNetplay;
+		if (g_peerIncompatible)
+			return PeerStatus::Incompatible;
+		if (g_peerKnown)
+			return PeerStatus::HasMod;
+		return GetTickCount64() - g_sessionStart < NO_MOD_AFTER_MS ? PeerStatus::Checking : PeerStatus::NoMod;
 	}
 
 	unsigned remoteGeneration()

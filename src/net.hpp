@@ -24,6 +24,15 @@ namespace ps::net {
 	// cache by then).
 	std::optional<PaletteHash> remotePalette(int charId, int slot);
 
+	enum class PeerStatus {
+		NotInNetplay,
+		Checking,      // session just started, no answer yet
+		HasMod,        // the opponent runs a compatible PaletteShare
+		NoMod,         // no answer after a few seconds: they see your fallback slot
+		Incompatible,  // they run another protocol version: they see your fallback slot
+	};
+	PeerStatus peerStatus();
+
 	// Bumped whenever a new remote palette has been received; lets the renderer pick up a palette
 	// that arrived after the character had already loaded.
 	unsigned remoteGeneration();

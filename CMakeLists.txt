@@ -29,6 +29,10 @@ add_library(PaletteShare MODULE
 	src/net.cpp
 	src/protocol.hpp
 	src/protocol.cpp
+	src/library.hpp
+	src/library.cpp
+	src/picker.hpp
+	src/picker.cpp
 )
 target_compile_definitions(PaletteShare PRIVATE
 	NOMINMAX _CRT_SECURE_NO_WARNINGS # no WIN32_LEAN_AND_MEAN: SokuLib's headers need winsock from <windows.h>

@@ -3,7 +3,9 @@
 #include <string>
 #include "hooks.hpp"
 #include "log.hpp"
+#include "library.hpp"
 #include "net.hpp"
+#include "picker.hpp"
 
 // th123.exe 1.10a
 static const BYTE TARGET_HASH[16] = {0xdf, 0x35, 0xd1, 0xfb, 0xc7, 0xb5, 0x83, 0x31, 0x7a, 0xda, 0xbe, 0x8c, 0xd9, 0xf5, 0x3b, 0x2e};
@@ -79,9 +81,11 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 	ps::log("PaletteShare %s starting in %ls", PALETTESHARE_VERSION, dir.c_str());
 
 	ps::cache.setDirectory(dir / L"cache");
+	ps::setLibraryRoot(dir / L"palettes");
 	loadConfig(ini);
 	ps::installHooks();
 	ps::net::install();
+	ps::picker::install();
 	return true;
 }
 
