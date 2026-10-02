@@ -37,6 +37,8 @@ add_library(PaletteShare MODULE
 	src/ui.cpp
 	src/menu.hpp
 	src/menu.cpp
+	src/original.hpp
+	src/original.cpp
 )
 target_compile_definitions(PaletteShare PRIVATE
 	NOMINMAX _CRT_SECURE_NO_WARNINGS # no WIN32_LEAN_AND_MEAN: SokuLib's headers need winsock from <windows.h>

@@ -398,7 +398,12 @@ namespace ps::picker {
 			if (custom) {
 				int slot = pick.target();
 				g_text.draw("You", x + YOU_X - 10, y + 2);
-				g_text.draw("Others 0" + std::to_string(slot), x + OTHERS_X - 26, y + 2);
+				// "(original)": this game shows the slot differently (a palette mod replaces it), and
+				// the preview shows what players without palette mods see instead.
+				if (ui::slotDiffersFromOriginal(pick.charId, slot))
+					g_text.draw("Others 0" + std::to_string(slot) + " (original)", x + OTHERS_X - 46, y + 2);
+				else
+					g_text.draw("Others 0" + std::to_string(slot), x + OTHERS_X - 26, y + 2);
 				g_customPreview[player].showPalette(pick.charId, custom->palette, x + YOU_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
 				g_fallbackPreview[player].showSlot(pick.charId, slot, x + OTHERS_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
 			} else {

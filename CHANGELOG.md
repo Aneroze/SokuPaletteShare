@@ -26,6 +26,9 @@
 - Files that can't be read are no longer silently ignored: the picker shows "N files skipped" and
   the palette menu lists them with the reason.
 - The palette folders of all 20 characters are created at startup.
+- "Others" previews show the game's original colors for the fallback slot, read straight from its
+  .dat archives, so a palette mod replacing that slot in your own game no longer misleads you. The
+  label adds "(original)" when your game shows the slot differently.
 - Fixed: a held confirm key chose the palette instantly, and a held arrow scrolled every frame.
 - Fixed: previews swayed left and right while animating (e.g. Reisen).
 

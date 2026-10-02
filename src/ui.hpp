@@ -31,7 +31,8 @@ namespace ps::ui {
 	class PalettePreview {
 	public:
 		// Draws the sprite with its bottom center at (x, y), shrunk to at most maxHeight pixels.
-		// The palette of a vanilla slot (what the game would load for it):
+		// A vanilla slot with the game's original colors (what players without palette mods see),
+		// or as this game loads it when the archives can't be read:
 		void showSlot(int charId, int slot, float x, float y, float maxHeight);
 		// Any palette (a library palette):
 		void showPalette(int charId, const Palette &palette, float x, float y, float maxHeight);
@@ -51,6 +52,9 @@ namespace ps::ui {
 
 	std::string narrow(const std::wstring &w);
 	std::string slotName(int slot);
+	// Whether this game shows a slot differently from the game's original colors (a shady-loader
+	// package or data file replaces it). Re-checked every 2 s; render thread.
+	bool slotDiffersFromOriginal(int charId, int slot);
 
 	// What to press for a game button, as bound in that keymap: the keyboard key's name ("Z", "A")
 	// or the gamepad button ("Pad3"). Hints use this rather than the game's button letters, since

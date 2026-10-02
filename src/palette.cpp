@@ -100,6 +100,25 @@ namespace ps {
 		return out;
 	}
 
+	static uint16_t rgb555At(const Palette &p, int i)
+	{
+		if (p.bpp == 16)
+			return static_cast<uint16_t>((p.colors[i * 2] | p.colors[i * 2 + 1] << 8) & 0x7FFF);
+		uint32_t c;
+		memcpy(&c, &p.colors[i * 4], 4);
+		return static_cast<uint16_t>(((c >> 19) & 0x1F) << 10 | ((c >> 11) & 0x1F) << 5 | ((c >> 3) & 0x1F));
+	}
+
+	bool sameColors(const Palette &a, const Palette &b)
+	{
+		if (!a.valid() || !b.valid())
+			return false;
+		for (int i = 0; i < 256; i++)
+			if (rgb555At(a, i) != rgb555At(b, i))
+				return false;
+		return true;
+	}
+
 	bool trueColorSupported()
 	{
 		// DPhoenix's mod ships as PaletteTrueColors.dll; palette-picker looks for true-color-palettes.dll.

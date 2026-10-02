@@ -128,10 +128,12 @@ namespace ps::menu {
 					_custom.showPalette(_charId, p.palette, px + 70, y + 190, 120);
 					_text.draw("Others see " + ui::slotName(p.fallback), px - 10, y + 210);
 					_fallback.showSlot(_charId, p.fallback, px + 70, y + 350, 120);
+					drawOriginalNote(p.fallback, px - 10, y + 354);
 				} else if (isDefaultRow()) {
 					_custom.clear();
 					_text.draw("Default fallback", px - 10, y + 210);
 					_fallback.showSlot(_charId, _lib.defaultFallback, px + 70, y + 350, 120);
+					drawOriginalNote(_lib.defaultFallback, px - 10, y + 354);
 				} else {
 					_custom.clear();
 					_fallback.clear();
@@ -143,6 +145,13 @@ namespace ps::menu {
 			}
 
 		private:
+			// The fallback preview shows the original colors; say so when this game's differ.
+			void drawOriginalNote(int slot, float x, float y)
+			{
+				if (ui::slotDiffersFromOriginal(_charId, slot))
+					_text.draw("Original colors (your game's differ)", x, y);
+			}
+
 			int rowCount() const { return static_cast<int>(_lib.palettes.size()) + 3; }
 			bool isPaletteRow() const { return _row < static_cast<int>(_lib.palettes.size()); }
 			bool isDefaultRow() const { return _row == static_cast<int>(_lib.palettes.size()); }

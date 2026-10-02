@@ -40,6 +40,10 @@ namespace ps {
 	// solid box.
 	Palette lockTransparency(const Palette &custom, const Palette &reference);
 
+	// Whether two palettes show the same colors, compared at the 16-bit palettes' 5 bits per
+	// channel and ignoring transparency (so a 16-bit and a 32-bit copy of one palette match).
+	bool sameColors(const Palette &a, const Palette &b);
+
 	// Copy the palette the game currently holds / replace it (reallocating with the game's
 	// allocator when the size changes). A 32-bit palette is reduced to 16-bit when no true-color
 	// palette mod is loaded, since the game's sprite conversion would not understand it.

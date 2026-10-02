@@ -44,7 +44,10 @@ palette menu lists each one with the reason (e.g. "compressed BMP (save it uncom
 picker: player 2 in VS Player, or player 1 choosing for the CPU or the Practice dummy):
 - Up/Down scroll through the 8 normal palettes and your own.
 - A panel shows the list, your palette (**You**) and what players without PaletteShare see
-  (**Others**), plus the palette's fallback.
+  (**Others**), plus the palette's fallback. **Others** shows the game's original colors for the
+  fallback slot, read from the game's own archives: if a palette mod (e.g. a shady-loader package)
+  replaces that slot in your game, players without palette mods still see the original, and the
+  label says "(original)".
 - The **random-select key** (**A** on the default keyboard layout, Pad3 on a gamepad) changes the
   highlighted palette's fallback: Up/Down pick a slot (the Others preview follows), A saves, X
   cancels. This replaces the game's random palette in that step; on the character grid the key

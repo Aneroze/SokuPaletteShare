@@ -1,4 +1,7 @@
 #include "ui.hpp"
+#include "original.hpp"
+#include "log.hpp"
+#include <windows.h>
 #include <d3d9.h>
 #include <cstdio>
 #include <algorithm>
@@ -8,6 +11,55 @@ namespace ps::ui {
 	namespace {
 		constexpr DWORD LOAD_PALETTE_FILE = 0x408BE0;  // thiscall(0x8A0048): (path, Palette *, bpp)
 		constexpr DWORD PALETTE_LOADER = 0x8A0048;
+
+		constexpr DWORD PREVIEW_PALETTE_CALL = 0x41FFB7;  // the select preview's call to the loader
+
+		// Loads a slot's palette the way this game's own select preview does, into the global
+		// palette. Mods that replace palettes (shady-loader) hook that call site rather than the
+		// loader itself, so call whatever it currently calls. The caller saves and restores the
+		// global palette.
+		void loadGameSlot(const char *name, int slot)
+		{
+			DWORD target = LOAD_PALETTE_FILE;
+			auto site = reinterpret_cast<const uint8_t *>(PREVIEW_PALETTE_CALL);
+			if (site[0] == 0xE8) {
+				int32_t rel;
+				memcpy(&rel, site + 1, 4);
+				target = PREVIEW_PALETTE_CALL + 5 + rel;
+			}
+			char path[96];
+			sprintf(path, "data/character/%s/palette%03d.bmp", name, slot);
+			reinterpret_cast<void (__fastcall *)(DWORD, void *, const char *, SokuLib::Palette *, int)>(target)(
+				PALETTE_LOADER, nullptr, path, &SokuLib::Palette::currentPalette, 16);
+		}
+	}
+
+	bool slotDiffersFromOriginal(int charId, int slot)
+	{
+		// Re-checked every couple of seconds rather than once, in case a mod changes its palettes
+		// while the game runs.
+		struct Check { bool differs; DWORD at; };
+		static std::map<std::pair<int, int>, Check> cache;
+		constexpr DWORD RECHECK_MS = 2000;
+		DWORD now = GetTickCount();
+		auto it = cache.find({charId, slot});
+		if (it != cache.end() && now - it->second.at < RECHECK_MS)
+			return it->second.differs;
+		const char *name = internalName(charId);
+		auto orig = original::palette(name, slot);
+		bool differs = false;
+		if (orig && name && *name) {
+			auto &current = SokuLib::Palette::currentPalette;
+			auto saved = readGamePalette(current);
+			loadGameSlot(name, slot);
+			differs = !sameColors(readGamePalette(current), *orig);
+			if (saved.valid())
+				writeGamePalette(saved, current);
+		}
+		if (it == cache.end() || it->second.differs != differs)
+			log("ui: %s slot %d %s the original", name ? name : "?", slot, differs ? "differs from" : "matches");
+		cache[{charId, slot}] = {differs, now};
+		return differs;
 	}
 
 	Text::Text(int height) : _height(height) {}
@@ -89,7 +141,12 @@ namespace ps::ui {
 
 	void PalettePreview::showSlot(int charId, int slot, float x, float y, float maxHeight)
 	{
-		show(charId, "slot" + std::to_string(slot), nullptr, slot, x, y, maxHeight);
+		// The original colors when the archives can be read: this game may replace the slot
+		// (shady-loader, data files), and players without palette mods don't see that.
+		if (auto orig = original::palette(internalName(charId), slot))
+			show(charId, "original" + std::to_string(slot), &*orig, -1, x, y, maxHeight);
+		else
+			show(charId, "slot" + std::to_string(slot), nullptr, slot, x, y, maxHeight);
 	}
 
 	void PalettePreview::showPalette(int charId, const Palette &palette, float x, float y, float maxHeight)
@@ -112,13 +169,11 @@ namespace ps::ui {
 			// whatever was there.
 			auto &current = SokuLib::Palette::currentPalette;
 			auto saved = readGamePalette(current);
-			char path[96];
-			if (palette) {
+			if (palette)
 				writeGamePalette(*palette, current);
-			} else {
-				sprintf(path, "data/character/%s/palette%03d.bmp", name, slot);
-				reinterpret_cast<void (__fastcall *)(DWORD, void *, const char *, SokuLib::Palette *, int)>(LOAD_PALETTE_FILE)(PALETTE_LOADER, nullptr, path, &current, 16);
-			}
+			else
+				loadGameSlot(name, slot);
+			char path[96];
 			sprintf(path, "data/scene/select/character/%s/stand.pat", name);
 			_manager->LoadPattern(path, 0);
 			_sprite = _manager->CreateEffect(0, x, y, SokuLib::Direction::RIGHT, 0, 0);
