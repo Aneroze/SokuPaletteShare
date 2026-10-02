@@ -49,5 +49,11 @@ namespace ps::ui {
 
 	std::string narrow(const std::wstring &w);
 	std::string slotName(int slot);
+
+	// What to press for a game button, as bound in that keymap: the keyboard key's name ("Z", "A")
+	// or the gamepad button ("Pad3"). Hints use this rather than the game's button letters, since
+	// the D button is the A key by default.
+	enum class Button { A, B, C, D };
+	std::string buttonName(const SokuLib::KeymapManager *keys, Button button);
 	const char *internalName(int charId);
 }

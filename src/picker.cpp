@@ -311,6 +311,12 @@ namespace ps::picker {
 		constexpr float YOU_X = 196, OTHERS_X = 258;  // preview centers, relative to the panel
 		constexpr float PREVIEW_HEIGHT = 75;
 
+		// The local player's key for a game button (the picker reads the same keymap).
+		std::string key(ui::Button button)
+		{
+			return ui::buttonName(reinterpret_cast<const SokuLib::KeymapManager *>(MENU_KEYS), button);
+		}
+
 		void drawPick(const Pick &pick, int player)
 		{
 			const float x = PANEL_X, y = PANEL_Y[player];
@@ -347,7 +353,7 @@ namespace ps::picker {
 			}
 			if (pick.editing) {
 				g_text.draw("Fallback: " + ui::slotName(pick.editSlot) + " ?", x + 8, infoY);
-				g_text.draw("Up/Down  D save  B cancel", x + 8, infoY + ROW);
+				g_text.draw("Up/Down  " + key(ui::Button::D) + " save  " + key(ui::Button::B) + " cancel", x + 8, infoY + ROW);
 				return;
 			}
 			std::string fallback = "Fallback " + ui::slotName(custom->fallback) + (custom->fallbackIsDefault ? " (default)" : "");
@@ -360,7 +366,7 @@ namespace ps::picker {
 			case net::PeerStatus::NoMod:
 			case net::PeerStatus::Incompatible: g_text.draw("Opponent sees " + ui::slotName(custom->fallback), x + 8, infoY + ROW); break;
 			case net::PeerStatus::Checking: g_text.draw("Opponent: checking...", x + 8, infoY + ROW); break;
-			default: g_text.draw("D: change fallback", x + 8, infoY + ROW); break;
+			default: g_text.draw(key(ui::Button::D) + ": change fallback", x + 8, infoY + ROW); break;
 			}
 		}
 

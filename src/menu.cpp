@@ -15,6 +15,8 @@ namespace ps::menu {
 		constexpr int SE_MOVE = 0x27, SE_OK = 0x28, SE_BACK = 0x29;
 
 		constexpr DWORD MENU_KEYS_POINTER = 0x89A394;       // KeymapManager * the game's menus read
+		constexpr DWORD LOCAL_KEYS = 0x8986A8;              // player 1's menu keymap: its bindings name
+		                                                    // the keys (the cluster above has none)
 
 		int (__fastcall *orig_deckMenuProcess)(void *self) = nullptr;
 
@@ -24,6 +26,11 @@ namespace ps::menu {
 		{
 			auto mgr = *reinterpret_cast<SokuLib::KeymapManager **>(MENU_KEYS_POINTER);
 			return mgr ? mgr->input : SokuLib::inputMgrs.input;
+		}
+
+		std::string key(ui::Button button)
+		{
+			return ui::buttonName(reinterpret_cast<const SokuLib::KeymapManager *>(LOCAL_KEYS), button);
 		}
 
 		int menuMove(int axis)
@@ -118,7 +125,8 @@ namespace ps::menu {
 					_fallback.clear();
 				}
 
-				_text.draw("Up/Down select   Left/Right fallback   C use default   B back", x + 16, y + h - 26);
+				_text.draw("Up/Down select   Left/Right fallback   " + key(ui::Button::C) + " use default   " +
+					key(ui::Button::B) + " back", x + 16, y + h - 26);
 				return true;
 			}
 

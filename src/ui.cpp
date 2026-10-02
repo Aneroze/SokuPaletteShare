@@ -181,6 +181,29 @@ namespace ps::ui {
 		return "Default 0" + std::to_string(slot);
 	}
 
+	std::string buttonName(const SokuLib::KeymapManager *keys, Button button)
+	{
+		static const char *const defaults[] = {"Z", "X", "C", "A"};  // the game's default keyboard keys
+		const int i = static_cast<int>(button);
+		if (!keys)
+			return defaults[i];
+		const int code = (&keys->bindings.a)[i];
+		// The game reads the device index as a signed byte: -1 = keyboard, 0.. = gamepad.
+		if (static_cast<signed char>(keys->bindings.index) >= 0)
+			return code >= 0 ? "Pad" + std::to_string(code) : defaults[i];  // the game's own "Pad0" naming
+		if (code <= 0 || code > 0xFF)
+			return defaults[i];
+		// DirectInput key codes are scan codes, with 0x80 marking the extended keys.
+		char name[32];
+		int n = GetKeyNameTextA(((code & 0x7F) << 16) | (code & 0x80 ? 1 << 24 : 0), name, sizeof(name));
+		if (n <= 0)
+			return defaults[i];
+		for (int k = 0; k < n; k++)
+			if (name[k] < 0x20 || name[k] > 0x7E || name[k] == '<')  // non-ASCII, or the renderer's markup
+				return "Key " + std::to_string(code);
+		return std::string(name, n);
+	}
+
 	const char *internalName(int charId)
 	{
 		return reinterpret_cast<const char *(*)(int)>(0x43F3F0)(charId);

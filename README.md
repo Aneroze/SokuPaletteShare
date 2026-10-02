@@ -27,9 +27,13 @@ created on first use.
 - Up/Down scroll through the 8 normal palettes and your own.
 - A panel shows the list, your palette (**You**) and what players without PaletteShare see
   (**Others**), plus the palette's fallback.
-- **D** changes the highlighted palette's fallback: Up/Down pick a slot (the Others preview
-  follows), D saves, B cancels. This replaces the game's random palette in that step; D still picks
-  a random character on the character grid.
+- The **random-select key** (**A** on the default keyboard layout, Pad3 on a gamepad) changes the
+  highlighted palette's fallback: Up/Down pick a slot (the Others preview follows), A saves, X
+  cancels. This replaces the game's random palette in that step; on the character grid the key
+  still picks a random character.
+
+Keys below are the default keyboard ones (Z confirm, X cancel, C submenu, A random). The on-screen
+hints show your own bindings.
 
 **The palette menu**: Profile → deck construction → choose a character → **C**. It lists that
 character's palettes with their fallbacks and large previews ("PaletteShare users see" / "Others
