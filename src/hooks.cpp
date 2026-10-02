@@ -137,6 +137,16 @@ namespace ps {
 			side.showingCustom = custom;
 		}
 
+		// Mirror safety net: the picker keeps both sides of a mirror match apart, but if side 1 would
+		// still look exactly like side 0 (a race online), side 1 yields. Same rule on both games.
+		bool looksLikeSide0(int index, int charId, const Palette &palette)
+		{
+			if (index != 1 || g_sides[0].charId != charId)
+				return false;
+			auto &first = g_sides[0];
+			return sameColors(first.showingCustom && first.custom ? *first.custom : first.vanilla, palette);
+		}
+
 		void __fastcall onLoadCharacter(SokuLib::v2::Player *self, void *edx)
 		{
 			g_loadingPlayer = self;
@@ -163,8 +173,12 @@ namespace ps {
 			side.slot = player->paletteId;
 			if (pickedHere(index)) {
 				if (auto mine = picker::customFor(index, side.charId)) {
-					writeGamePalette(*mine, palette);
-					log("load side=%d: our picked custom palette (game slot %d is the fallback)", index, side.slot);
+					if (looksLikeSide0(index, side.charId, *mine)) {
+						log("load side=%d: our custom palette is the same as side 0's (mirror), using game slot %d", index, side.slot);
+					} else {
+						writeGamePalette(*mine, palette);
+						log("load side=%d: our picked custom palette (game slot %d is the fallback)", index, side.slot);
+					}
 				}
 			}
 			side.vanilla = readGamePalette(palette);
@@ -181,6 +195,10 @@ namespace ps {
 				net::offerLocal(side.charId, side.slot, side.vanilla, hash);
 
 			side.custom = customFor(index, side.charId, side.slot, side.vanilla);
+			if (side.custom && looksLikeSide0(index, side.charId, *side.custom)) {
+				log("  side=%d: custom palette is the same as side 0's (mirror), showing game slot %d", index, side.slot);
+				side.custom.reset();
+			}
 			if (side.custom && g_showOpponent) {
 				writeGamePalette(*side.custom, palette);
 				side.showingCustom = true;

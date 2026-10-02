@@ -24,7 +24,9 @@ namespace ps::picker {
 		constexpr int OUTKEYS_OFFSET = 0x62;        // bits sent in netplay: up 1, down 2, left 4,
 		                                            // right 8, A 16, B 32, C 64, D 128
 		constexpr int STAGE_PALETTE = 1;
-		constexpr int MAX_STEER_PRESSES = 16;       // then the slot is unreachable (mirror)
+		constexpr int MAX_STEER_PRESSES = 16;       // then the slot is unreachable (shouldn't happen)
+		constexpr int PLAYER_INFO = 0xC;            // Select: PlayerInfo[2], 0x20 bytes each:
+		constexpr int INFO_SIZE = 0x20, INFO_CHARACTER = 0x8, INFO_PALETTE = 0xD;  // (see 0x4206E1)
 		constexpr int STEER_TIMEOUT_FRAMES = 90;    // a press the game never applied
 
 		enum class Steer { Idle, Pressed, Waiting };
@@ -39,7 +41,11 @@ namespace ps::picker {
 			int wheelAtPress = -1;
 			int waitFrames = 0;
 			int presses = 0;
-			int unreachable = -1;    // fallback slot the wheel couldn't reach (mirror match)
+			int unreachable = -1;    // fallback slot the wheel couldn't reach
+			// Mirror match (both sides the same character, the other one chosen): the game won't
+			// let the wheel land on the other side's slot, and we skip the other side's palette.
+			int takenSlot = -1;
+			std::optional<Palette> takenPalette;
 			bool pendingConfirm = false;
 			bool editing = false;    // D: changing the highlighted palette's fallback
 			const SokuLib::KeymapManager *keys = nullptr;  // drives this pick (for the key hints)
@@ -52,11 +58,34 @@ namespace ps::picker {
 			int count() const { return 8 + static_cast<int>(lib.palettes.size()); }
 			LibraryPalette *custom() { return index >= 8 ? &lib.palettes[index - 8] : nullptr; }
 			const LibraryPalette *custom() const { return index >= 8 ? &lib.palettes[index - 8] : nullptr; }
-			int target() const
+			// The slot our palette asks for, and the slot it gets this match: a taken slot moves
+			// to the next one, like the game bumps it (0x42084D).
+			int wantedSlot() const
 			{
 				if (index < 8)
 					return index;
 				return editing ? editSlot : lib.palettes[index - 8].fallback;
+			}
+			int bumped(int slot) const { return slot == takenSlot ? (slot + 1) % 8 : slot; }
+			int target() const { return bumped(wantedSlot()); }
+
+			// Entries the other side of a mirror match already uses: its slot, or its palette.
+			bool taken(int i) const
+			{
+				if (i < 8)
+					return i == takenSlot;
+				return takenPalette && sameColors(lib.palettes[i - 8].palette, *takenPalette);
+			}
+			// The nearest entry in that direction the other side doesn't use (the game's skip).
+			int step(int from, int direction) const
+			{
+				int i = from;
+				for (int n = 0; n < count(); n++) {
+					i = (i + direction + count()) % count();
+					if (!taken(i))
+						return i;
+				}
+				return from;
 			}
 		};
 
@@ -155,6 +184,36 @@ namespace ps::picker {
 			log("picker: palette step for side=%d char=%d, %d custom palette(s), starting at %d", side, charId, (int)pick.lib.palettes.size(), pick.index);
 		}
 
+		// Mirror match: what the other side uses, as the game decides it (0x4204A0: only once the
+		// other side chose its character, and only for the same character).
+		void updateMirror(SokuLib::Select *sel, int side, Pick &pick)
+		{
+			pick.takenSlot = -1;
+			pick.takenPalette.reset();
+			int other = 1 - side;
+			auto info = *reinterpret_cast<const uint8_t *const *>(reinterpret_cast<const char *>(sel) + PLAYER_INFO);
+			if (!info || stageOf(sel, other) == 0)
+				return;
+			int mine = *reinterpret_cast<const int *>(info + side * INFO_SIZE + INFO_CHARACTER);
+			int theirs = *reinterpret_cast<const int *>(info + other * INFO_SIZE + INFO_CHARACTER);
+			if (mine != theirs || mine != pick.charId)
+				return;
+			pick.takenSlot = *reinterpret_cast<const int8_t *>(info + other * INFO_SIZE + INFO_PALETTE);
+
+			// The other side's palette: our own pick offline, the opponent's offer online.
+			auto &theirPick = g_picks[other];
+			if (!online()) {
+				if (theirPick.active && theirPick.charId == pick.charId) {
+					if (auto custom = theirPick.custom())
+						pick.takenPalette = custom->palette;
+				} else if (theirPick.confirmed && theirPick.confirmedChar == pick.charId) {
+					pick.takenPalette = theirPick.confirmedCustom;
+				}
+			} else if (auto hash = net::remotePalette(pick.charId, pick.takenSlot)) {
+				pick.takenPalette = cache.load(*hash);
+			}
+		}
+
 		int menuMove(int axis)
 		{
 			// The game's usual feel: one step on press, then repeat while held.
@@ -204,9 +263,13 @@ namespace ps::picker {
 				pick.active = false;
 				return false;
 			}
-			if (!pick.active || pick.charId != charId)
+			bool starting = !pick.active || pick.charId != charId;
+			if (starting)
 				startPick(pick, side, charId, wheel);
 			pick.keys = mgr;
+			updateMirror(sel, side, pick);
+			if (starting && pick.taken(pick.index))
+				pick.index = pick.step(pick.index, 1);  // the remembered choice is the other side's
 
 			// A submenu (C: profile/deck menus) opened over the select screen gets the keys untouched.
 			if (submenuOpen()) {
@@ -225,7 +288,7 @@ namespace ps::picker {
 			} else {
 				// 1. Up/Down move our list.
 				if (int move = menuMove(in.verticalAxis)) {
-					pick.index = (pick.index + move + pick.count()) % pick.count();
+					pick.index = pick.step(pick.index, move);
 					pick.previewDirty = true;
 					pick.presses = 0;
 					pick.unreachable = -1;
@@ -258,7 +321,7 @@ namespace ps::picker {
 				if (wheel != target && pick.unreachable != target) {
 					if (pick.presses >= MAX_STEER_PRESSES) {
 						pick.unreachable = target;
-						log("picker: slot %d can't be reached (taken in a mirror match?), staying on %d", target, wheel);
+						log("picker: slot %d can't be reached, staying on %d", target, wheel);
 						break;
 					}
 					int forward = (target - wheel + 8) % 8;
@@ -390,8 +453,8 @@ namespace ps::picker {
 				g_text.draw(std::to_string(n) + (n == 1 ? " file skipped" : " files skipped"), x + 92, y + 2);
 			const float listY = y + 18 + ROW;
 			SokuLib::MenuCursor::render(x + 6, listY, 160);
-			for (int d = -1; d <= 1; d++)
-				g_text.draw(entryName(pick, pick.index + d), x + 12, listY + ROW * d);
+			for (int d = -1; d <= 1; d++)  // neighbors as Up/Down reach them (skipping mirror-taken ones)
+				g_text.draw(entryName(pick, d ? pick.step(pick.index, d) : pick.index), x + 12, listY + ROW * d);
 
 			// Previews
 			auto custom = pick.custom();
@@ -425,14 +488,16 @@ namespace ps::picker {
 				return;
 			}
 			std::string fallback = "Fallback " + ui::slotName(custom->fallback) + (custom->fallbackIsDefault ? " (default)" : "");
-			if (pick.unreachable == custom->fallback)
-				fallback = ui::slotName(custom->fallback) + " is taken (mirror)";
+			if (pick.bumped(custom->fallback) != custom->fallback)  // mirror match: this match only
+				fallback = ui::slotName(custom->fallback) + " taken, others see 0" + std::to_string(pick.bumped(custom->fallback));
+			else if (pick.unreachable == custom->fallback)
+				fallback = ui::slotName(custom->fallback) + " can't be reached";
 			g_text.draw(fallback, x + 8, infoY);
 
 			switch (net::peerStatus()) {
 			case net::PeerStatus::HasMod: g_text.draw("Opponent sees your palette", x + 8, infoY + ROW); break;
 			case net::PeerStatus::NoMod:
-			case net::PeerStatus::Incompatible: g_text.draw("Opponent sees " + ui::slotName(custom->fallback), x + 8, infoY + ROW); break;
+			case net::PeerStatus::Incompatible: g_text.draw("Opponent sees " + ui::slotName(pick.target()), x + 8, infoY + ROW); break;
 			case net::PeerStatus::Checking: g_text.draw("Opponent: checking...", x + 8, infoY + ROW); break;
 			default: g_text.draw(key(pick, ui::Button::D) + ": change fallback", x + 8, infoY + ROW); break;
 			}

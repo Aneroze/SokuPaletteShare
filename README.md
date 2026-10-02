@@ -65,6 +65,12 @@ see"):
   changed).
 - "Open palette folder" opens the folder in Explorer.
 
+**Mirror matches** (both sides the same character) work like the game's own rule: a palette the
+other side already uses is skipped in the list, just as the game skips the other side's slot. A
+different custom palette whose fallback slot is taken uses the next slot for that match only (the
+panel says "Default 05 taken, others see 06"), and nothing is saved. The two sides never end up
+looking the same.
+
 Each palette's **fallback** is the normal slot (0-7) your game actually sends. It's what players
 without PaletteShare, spectators and replays see, and the picker always shows it ("(default)" when
 it follows the character default). Changes are saved right away to the folder's `palettes.ini`.

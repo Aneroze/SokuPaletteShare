@@ -29,6 +29,10 @@
 - "Others" previews show the game's original colors for the fallback slot, read straight from its
   .dat archives, so a palette mod replacing that slot in your own game no longer misleads you. The
   label adds "(original)" when your game shows the slot differently.
+- Mirror matches follow the game's rule: the other side's palette is skipped in the list, and a
+  taken fallback slot moves to the next one for that match ("Default 05 taken, others see 06").
+  Before, the picker probed for the taken slot (repeated menu sounds) and could still give both
+  sides the same custom palette. A load-time check makes side 1 yield if they'd still match.
 - Fixed: a held confirm key chose the palette instantly, and a held arrow scrolled every frame.
 - Fixed: previews swayed left and right while animating (e.g. Reisen).
 
