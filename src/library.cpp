@@ -199,6 +199,9 @@ namespace ps {
 			return s;
 		}
 
+		// [last] is the player's own choice (player 1, or our side online); [last2p] player 2's offline.
+		const wchar_t *lastSection(int who) { return who == 0 ? L"last" : L"last2p"; }
+
 		std::wstring charFolderName(int charId)
 		{
 			auto getName = reinterpret_cast<const char *(*)(int)>(0x43F3F0);
@@ -224,10 +227,12 @@ namespace ps {
 			auto ini = (lib.folder / L"palettes.ini").wstring();
 			lib.defaultFallback = std::clamp<int>(GetPrivateProfileIntW(L"default", L"fallback", 0, ini.c_str()), 0, 7);
 
-			wchar_t buffer[256];
-			GetPrivateProfileStringW(L"last", L"palette", L"", buffer, 256, ini.c_str());
-			lib.lastSelected = buffer;
-			lib.lastSlot = static_cast<int>(GetPrivateProfileIntW(L"last", L"slot", -1, ini.c_str()));
+			for (int who = 0; who < 2; who++) {
+				wchar_t buffer[256];
+				GetPrivateProfileStringW(lastSection(who), L"palette", L"", buffer, 256, ini.c_str());
+				lib.lastSelected[who] = buffer;
+				lib.lastSlot[who] = static_cast<int>(GetPrivateProfileIntW(lastSection(who), L"slot", -1, ini.c_str()));
+			}
 
 			for (auto &entry : std::filesystem::directory_iterator(lib.folder, ec)) {
 				if (!entry.is_regular_file())
@@ -301,20 +306,20 @@ namespace ps {
 		return g_cache[charId] = std::move(lib);
 	}
 
-	void rememberSelection(int charId, const std::wstring &customName, int slot)
+	void rememberSelection(int charId, int who, const std::wstring &customName, int slot)
 	{
 		std::lock_guard lock(g_mutex);
 		auto it = g_cache.find(charId);
-		if (it == g_cache.end() || it->second.folder.empty())
+		if (it == g_cache.end() || it->second.folder.empty() || who < 0 || who > 1)
 			return;
 		auto &lib = it->second;
-		if (lib.lastSelected == customName && lib.lastSlot == slot)
+		if (lib.lastSelected[who] == customName && lib.lastSlot[who] == slot)
 			return;
-		lib.lastSelected = customName;
-		lib.lastSlot = slot;
+		lib.lastSelected[who] = customName;
+		lib.lastSlot[who] = slot;
 		auto ini = (lib.folder / L"palettes.ini").wstring();
-		WritePrivateProfileStringW(L"last", L"palette", customName.c_str(), ini.c_str());
-		WritePrivateProfileStringW(L"last", L"slot", std::to_wstring(slot).c_str(), ini.c_str());
+		WritePrivateProfileStringW(lastSection(who), L"palette", customName.c_str(), ini.c_str());
+		WritePrivateProfileStringW(lastSection(who), L"slot", std::to_wstring(slot).c_str(), ini.c_str());
 		g_stamp[charId] = stampOf(lib.folder);  // our own write isn't a reason to rescan
 	}
 

@@ -14,7 +14,11 @@
   (key names, or PadN on a gamepad) instead of the game's button letters.
 - Palette menu (Profile, deck construction, a character, C): every palette's fallback, the character
   default, large previews, and a shortcut to the palette folder.
-- The picker steps aside while the game's submenus are open over the select screen.
+- The picker steps aside while the game's submenus are open over the select screen (but not for the
+  Vs Network menu that stays open under it online).
+- The picker works with a gamepad, and offline for both sides: player 2 in VS Player, and player 1
+  choosing the CPU's or the Practice dummy's palette. Player 2's last choice is remembered
+  separately (`[last2p]` in palettes.ini).
 - An opponent palette identical to the one we'd show anyway is no longer treated as custom.
 - Palette files: every `.pal` palette-picker reads (game format, or the old Palette Editor's 256
   colors, with or without the character name after them), JASC-PAL, RIFF PAL, `.act` (with color

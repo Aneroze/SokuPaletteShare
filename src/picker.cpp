@@ -14,7 +14,10 @@
 
 namespace ps::picker {
 	namespace {
-		constexpr DWORD MENU_KEYS = 0x8986A8;       // the local player's menu KeymapManager
+		constexpr DWORD MENU_KEYS = 0x8986A8;       // the keyboard's menu KeymapManager
+		constexpr DWORD P1_DEVICE = 0x898678;       // player 1's device: -1 keyboard, 0.. a gamepad
+		constexpr DWORD GAMEPAD_KEYS = 0x899CEC;    // vector of the gamepads' KeymapManagers
+		constexpr int GAMEPAD_KEYS_SIZE = 0x68;     //   (stride, see 0x43E3B0)
 		constexpr DWORD SETINPUTS_CALL = 0x40A45D;  // the game's only call to KeymapManager::SetInputs
 		constexpr DWORD SET_PALETTE_SELECT = 0x41FE60;  // rebuilds a player's select preview
 		constexpr int KEYINPUT_OFFSET = 0x38;
@@ -39,6 +42,7 @@ namespace ps::picker {
 			int unreachable = -1;    // fallback slot the wheel couldn't reach (mirror match)
 			bool pendingConfirm = false;
 			bool editing = false;    // D: changing the highlighted palette's fallback
+			const SokuLib::KeymapManager *keys = nullptr;  // drives this pick (for the key hints)
 			int editSlot = 0;
 			// what was confirmed, kept for the loading screen
 			bool confirmed = false;
@@ -72,13 +76,52 @@ namespace ps::picker {
 			}
 		}
 
-		// The player our menu keys drive: player 1 offline, our side in netplay.
-		int localPlayer()
+		bool online() { return SokuLib::sceneId != SokuLib::SCENE_SELECT; }
+
+		// Menus open under the select screen (online the Vs Network menu stays on the stack), so a
+		// submenu opened over it (C: profile/deck menus) is one more than that. Game thread only.
+		int g_menusUnderSelect = -1;
+
+		void trackMenus(bool inSelect)
 		{
-			if (SokuLib::sceneId == SokuLib::SCENE_SELECT)
-				return 0;
-			return net::localSide();
+			int open = static_cast<int>(SokuLib::menuManager.size());
+			if (!inSelect)
+				g_menusUnderSelect = -1;
+			else if (g_menusUnderSelect < 0 || open < g_menusUnderSelect)
+				g_menusUnderSelect = open;
 		}
+
+		bool submenuOpen() { return g_menusUnderSelect >= 0 && static_cast<int>(SokuLib::menuManager.size()) > g_menusUnderSelect; }
+
+		// Player 1's own device keymap (keyboard or gamepad), where the game decodes the local keys
+		// before netplay sends them; looked up like 0x43EA4B does, but bounds-checked.
+		SokuLib::KeymapManager *localDeviceKeys()
+		{
+			auto keyboard = reinterpret_cast<SokuLib::KeymapManager *>(MENU_KEYS);
+			int device = *reinterpret_cast<signed char *>(P1_DEVICE);
+			if (device < 0)
+				return keyboard;
+			auto begin = *reinterpret_cast<char **>(GAMEPAD_KEYS + 4);
+			auto end = *reinterpret_cast<char **>(GAMEPAD_KEYS + 8);
+			if (!begin || end < begin || device >= (end - begin) / GAMEPAD_KEYS_SIZE)
+				return keyboard;
+			return reinterpret_cast<SokuLib::KeymapManager *>(begin + device * GAMEPAD_KEYS_SIZE);
+		}
+
+		// The keymap that drives a side's choice, or null when we don't drive that side. Online only
+		// our side, with player 1's device keymap (the scene's own keymaps are netplay streams
+		// there). Offline each side its own keymap (Select::leftKeys/rightKeys, a gamepad's for
+		// player 2); a side without one (Practice, VS COM) is picked by player 1, like the game does.
+		SokuLib::KeymapManager *keysOf(SokuLib::Select *sel, int side)
+		{
+			if (online())
+				return side == net::localSide() ? localDeviceKeys() : nullptr;
+			auto keys = side == 0 ? sel->leftKeys : sel->rightKeys;
+			return keys ? keys : sel->leftKeys;
+		}
+
+		// Whose remembered choice a side uses: the player's own, or player 2's offline.
+		int memoryOf(int side) { return !online() && side == 1 ? 1 : 0; }
 
 		char &stageOf(SokuLib::Select *sel, int player) { return player == 0 ? sel->leftSelectionStage : sel->rightSelectionStage; }
 		SokuLib::InputHandler &wheelOf(SokuLib::Select *sel, int player) { return player == 0 ? sel->leftPalInput : sel->rightPalInput; }
@@ -93,22 +136,23 @@ namespace ps::picker {
 			return id == SokuLib::CHARACTER_RANDOM || id == SokuLib::CHARACTER_NAMAZU ? -1 : id;
 		}
 
-		void startPick(Pick &pick, int charId, int wheel)
+		void startPick(Pick &pick, int side, int charId, int wheel)
 		{
 			pick = Pick{};
 			pick.active = true;
 			pick.charId = charId;
 			pick.lib = library(charId);
 			pick.index = wheel;
-			if (!pick.lib.lastSelected.empty()) {
+			int who = memoryOf(side);
+			if (!pick.lib.lastSelected[who].empty()) {
 				for (size_t i = 0; i < pick.lib.palettes.size(); i++)
-					if (pick.lib.palettes[i].name == pick.lib.lastSelected)
+					if (pick.lib.palettes[i].name == pick.lib.lastSelected[who])
 						pick.index = 8 + static_cast<int>(i);
-			} else if (pick.lib.lastSlot >= 0 && pick.lib.lastSlot < 8) {
-				pick.index = pick.lib.lastSlot;
+			} else if (pick.lib.lastSlot[who] >= 0 && pick.lib.lastSlot[who] < 8) {
+				pick.index = pick.lib.lastSlot[who];
 			}
 			pick.previewDirty = true;
-			log("picker: palette step for char=%d, %d custom palette(s), starting at %d", charId, (int)pick.lib.palettes.size(), pick.index);
+			log("picker: palette step for side=%d char=%d, %d custom palette(s), starting at %d", side, charId, (int)pick.lib.palettes.size(), pick.index);
 		}
 
 		int menuMove(int axis)
@@ -145,42 +189,31 @@ namespace ps::picker {
 			}
 		}
 
-		// Runs once per frame after the game decoded the local player's keys.
-		void drive(SokuLib::KeymapManager *mgr)
+		// One side's palette step, with the keys the game just decoded from that side's keymap.
+		// Returns whether it drove the step.
+		bool driveSide(SokuLib::Select *sel, int side, SokuLib::KeymapManager *mgr)
 		{
-			auto sel = selectScene();
-			int player = sel ? localPlayer() : -1;
-			if (!sel || player < 0) {
-				std::lock_guard lock(g_mutex);
-				for (auto &p : g_picks) {
-					p.active = false;
-					if (SokuLib::sceneId == SokuLib::SCENE_TITLE)
-						p.confirmed = false;  // a pick never outlives its session
-				}
-				return;
-			}
-
-			std::lock_guard lock(g_mutex);
-			auto &pick = g_picks[player];
-			int stage = stageOf(sel, player);
-			int charId = characterOf(sel, player);
-			int wheel = wheelOf(sel, player).pos;
+			auto &pick = g_picks[side];
+			int stage = stageOf(sel, side);
+			int charId = characterOf(sel, side);
+			int wheel = wheelOf(sel, side).pos;
 
 			if (stage != STAGE_PALETTE || charId < 0) {
 				if (pick.active && stage < STAGE_PALETTE)
 					pick.confirmed = false;  // went back to character choice
 				pick.active = false;
-				return;
+				return false;
 			}
 			if (!pick.active || pick.charId != charId)
-				startPick(pick, charId, wheel);
+				startPick(pick, side, charId, wheel);
+			pick.keys = mgr;
 
 			// A submenu (C: profile/deck menus) opened over the select screen gets the keys untouched.
-			if (!SokuLib::menuManager.empty()) {
+			if (submenuOpen()) {
 				pick.pendingConfirm = false;
 				pick.steer = Steer::Idle;
 				pick.editing = false;
-				return;
+				return true;
 			}
 
 			auto &in = *reinterpret_cast<SokuLib::KeyInput *>(reinterpret_cast<char *>(mgr) + KEYINPUT_OFFSET);
@@ -248,8 +281,8 @@ namespace ps::picker {
 				pick.confirmedChar = charId;
 				auto custom = pick.custom();
 				pick.confirmedCustom = custom ? std::optional<Palette>(custom->palette) : std::nullopt;
-				rememberSelection(charId, custom ? custom->name : L"", custom ? -1 : pick.index);
-				log("picker: confirmed char=%d %ls, game slot %d", charId, custom ? custom->name.c_str() : L"(vanilla)", wheel);
+				rememberSelection(charId, memoryOf(side), custom ? custom->name : L"", custom ? -1 : pick.index);
+				log("picker: confirmed side=%d char=%d %ls, game slot %d", side, charId, custom ? custom->name.c_str() : L"(vanilla)", wheel);
 			}
 
 			in.verticalAxis = emitV;
@@ -264,29 +297,57 @@ namespace ps::picker {
 				in.c = 0;
 				bits &= ~(4 | 8 | 32 | 64);
 			}
+			return true;
+		}
+
+		// Runs once per frame for each keymap, after the game decoded its keys.
+		void drive(SokuLib::KeymapManager *mgr)
+		{
+			auto sel = selectScene();
+			trackMenus(sel != nullptr);
+			std::lock_guard lock(g_mutex);
+			if (!sel) {
+				for (auto &p : g_picks) {
+					p.active = false;
+					if (SokuLib::sceneId == SokuLib::SCENE_TITLE)
+						p.confirmed = false;  // a pick never outlives its session
+				}
+				return;
+			}
+			// One side per keymap and frame: in Practice player 1 picks both sides, one after the other.
+			for (int side = 0; side < 2; side++)
+				if (keysOf(sel, side) == mgr && driveSide(sel, side, mgr))
+					break;
 		}
 
 		// SetInputs counts held frames incrementally (a key held for 2 frames reads 2), so the
 		// counters we overwrite must be put back before it runs again: otherwise a held Z would
 		// read as a fresh press (a == 1) on the next frame and a held arrow would step every frame.
-		SokuLib::KeyInput g_realKeys;
-		SokuLib::KeyInput g_writtenKeys;
-		bool g_overridden = false;
+		// Kept per keymap (keyboard, gamepads); only touched on the game thread.
+		struct Override {
+			SokuLib::KeyInput real;
+			SokuLib::KeyInput written;
+			bool active = false;
+		};
+		std::map<void *, Override> g_overrides;
 
 		void __fastcall onSetInputs(void *mgr, void *edx)
 		{
-			bool ours = !g_disabled && reinterpret_cast<DWORD>(mgr) == MENU_KEYS;
 			auto &in = *reinterpret_cast<SokuLib::KeyInput *>(reinterpret_cast<char *>(mgr) + KEYINPUT_OFFSET);
-			if (ours && g_overridden && memcmp(&in, &g_writtenKeys, sizeof(in)) == 0)
-				in = g_realKeys;  // untouched since our override (the game didn't reset them)
-			g_overridden = false;
+			auto it = g_overrides.find(mgr);
+			if (it != g_overrides.end() && it->second.active) {
+				if (memcmp(&in, &it->second.written, sizeof(in)) == 0)
+					in = it->second.real;  // untouched since our override (the game didn't reset them)
+				it->second.active = false;
+			}
 			orig_setInputs(mgr, edx);
-			if (!ours)
+			if (g_disabled)
 				return;
-			g_realKeys = in;
+			auto &o = g_overrides[mgr];
+			o.real = in;
 			drive(static_cast<SokuLib::KeymapManager *>(mgr));
-			g_writtenKeys = in;
-			g_overridden = memcmp(&g_realKeys, &g_writtenKeys, sizeof(in)) != 0;
+			o.written = in;
+			o.active = memcmp(&o.real, &o.written, sizeof(in)) != 0;
 		}
 
 		// --- drawing ---------------------------------------------------------------------------
@@ -311,10 +372,10 @@ namespace ps::picker {
 		constexpr float YOU_X = 196, OTHERS_X = 258;  // preview centers, relative to the panel
 		constexpr float PREVIEW_HEIGHT = 75;
 
-		// The local player's key for a game button (the picker reads the same keymap).
-		std::string key(ui::Button button)
+		// What the pick's player presses for a game button.
+		std::string key(const Pick &pick, ui::Button button)
 		{
-			return ui::buttonName(reinterpret_cast<const SokuLib::KeymapManager *>(MENU_KEYS), button);
+			return ui::buttonName(pick.keys ? pick.keys : reinterpret_cast<const SokuLib::KeymapManager *>(MENU_KEYS), button);
 		}
 
 		void drawPick(const Pick &pick, int player)
@@ -355,7 +416,7 @@ namespace ps::picker {
 			}
 			if (pick.editing) {
 				g_text.draw("Fallback: " + ui::slotName(pick.editSlot) + " ?", x + 8, infoY);
-				g_text.draw("Up/Down  " + key(ui::Button::D) + " save  " + key(ui::Button::B) + " cancel", x + 8, infoY + ROW);
+				g_text.draw("Up/Down  " + key(pick, ui::Button::D) + " save  " + key(pick, ui::Button::B) + " cancel", x + 8, infoY + ROW);
 				return;
 			}
 			std::string fallback = "Fallback " + ui::slotName(custom->fallback) + (custom->fallbackIsDefault ? " (default)" : "");
@@ -368,7 +429,7 @@ namespace ps::picker {
 			case net::PeerStatus::NoMod:
 			case net::PeerStatus::Incompatible: g_text.draw("Opponent sees " + ui::slotName(custom->fallback), x + 8, infoY + ROW); break;
 			case net::PeerStatus::Checking: g_text.draw("Opponent: checking...", x + 8, infoY + ROW); break;
-			default: g_text.draw(key(ui::Button::D) + ": change fallback", x + 8, infoY + ROW); break;
+			default: g_text.draw(key(pick, ui::Button::D) + ": change fallback", x + 8, infoY + ROW); break;
 			}
 		}
 
@@ -386,23 +447,26 @@ namespace ps::picker {
 			static int __fastcall hook(void *self)
 			{
 				auto sel = static_cast<SokuLib::Select *>(self);
-				int player = localPlayer();
-				if (!g_disabled && player >= 0) {
-					std::unique_lock lock(g_mutex);
-					auto &pick = g_picks[player];
-					if (pick.active && pick.previewDirty) {
-						lock.unlock();  // the rebuild calls back into our preview hook
-						refreshPreview(sel, player, pick);
+				if (!g_disabled) {
+					for (int side = 0; side < 2; side++) {
+						std::unique_lock lock(g_mutex);
+						auto &pick = g_picks[side];
+						if (pick.active && pick.previewDirty) {
+							lock.unlock();  // the rebuild calls back into our preview hook
+							refreshPreview(sel, side, pick);
+						}
 					}
 				}
 				int ret = orig(self);
-				if (!g_disabled && player >= 0) {
+				if (!g_disabled) {
 					std::lock_guard lock(g_mutex);
-					if (g_picks[player].active && SokuLib::menuManager.empty())
-						drawPick(g_picks[player], player);
-					else {
-						g_customPreview[player].clear();
-						g_fallbackPreview[player].clear();
+					for (int side = 0; side < 2; side++) {
+						if (g_picks[side].active && keysOf(sel, side) && !submenuOpen())
+							drawPick(g_picks[side], side);
+						else {
+							g_customPreview[side].clear();
+							g_fallbackPreview[side].clear();
+						}
 					}
 				}
 				return ret;

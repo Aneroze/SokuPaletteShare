@@ -14,6 +14,7 @@
 //   fallback=0        ; slot used by palettes that have no fallback of their own (default 0)
 //   [Blue Reimu]      ; file name without extension
 //   fallback=3
+//   [last] / [last2p] ; the last choice of player 1 (our side online) / player 2 offline
 //
 // The fallback is the vanilla slot (0-7) the game actually sends, so it is what players without
 // PaletteShare (and spectators/replays) see.
@@ -40,14 +41,16 @@ namespace ps {
 		int defaultFallback = 0;
 		std::vector<LibraryPalette> palettes;  // sorted by name
 		std::vector<SkippedFile> skipped;      // palette-like files that couldn't be read
-		std::wstring lastSelected;             // "" = a vanilla slot (see lastSlot)
-		int lastSlot = -1;
+		// Last choice, [0] the player's own (player 1, or our side online), [1] player 2's offline.
+		std::wstring lastSelected[2];          // "" = a vanilla slot (see lastSlot)
+		int lastSlot[2] = {-1, -1};
 	};
 
 	void setLibraryRoot(const std::filesystem::path &root);
 	// Loaded (and cached) on first use; rescanned when the folder changed since.
 	const CharacterLibrary &library(int charId);
-	void rememberSelection(int charId, const std::wstring &customName, int slot);
+	// who: 0 = the player's own choice, 1 = player 2 offline.
+	void rememberSelection(int charId, int who, const std::wstring &customName, int slot);
 	// Saves a palette's own fallback slot (0-7) to palettes.ini.
 	void setFallback(int charId, const std::wstring &name, int slot);
 	// Removes a palette's own fallback: it follows the character default again.

@@ -40,7 +40,8 @@ swapped here (PaletteShare reads it correctly).
 A file PaletteShare can't read isn't silently ignored: the picker shows "N files skipped", and the
 palette menu lists each one with the reason (e.g. "compressed BMP (save it uncompressed)").
 
-**At character select**, in the palette step:
+**At character select**, in the palette step (keyboard or gamepad; offline both sides get the
+picker: player 2 in VS Player, or player 1 choosing for the CPU or the Practice dummy):
 - Up/Down scroll through the 8 normal palettes and your own.
 - A panel shows the list, your palette (**You**) and what players without PaletteShare see
   (**Others**), plus the palette's fallback.

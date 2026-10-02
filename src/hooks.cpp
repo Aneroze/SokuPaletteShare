@@ -61,14 +61,15 @@ namespace ps {
 		int *(__fastcall *orig_loadTexture)(void *mgr, void *edx, int *ret, LPCSTR path, void *w, void *h) = nullptr;
 		DWORD orig_getCharName = 0;
 
-		// The side whose palette the local player picks: our side in netplay, player 1 in offline
-		// modes, none when watching (replays, spectating).
-		int pickerSide()
+		// Whether the picker chose this side's palette here: our side in netplay, both sides offline
+		// (player 2, or player 1 picking for the CPU/dummy), none when watching (replays,
+		// spectating). The picker itself only answers for sides that went through it.
+		bool pickedHere(int side)
 		{
 			if (SokuLib::subMode == SokuLib::BATTLE_SUBMODE_REPLAY || SokuLib::mainMode == SokuLib::BATTLE_MODE_VSWATCH)
-				return -1;
+				return false;
 			int local = net::localSide();
-			return local >= 0 ? local : 0;
+			return local < 0 || side == local;
 		}
 
 		int remoteSide()
@@ -160,7 +161,7 @@ namespace ps {
 			side = Side{};
 			side.charId = player->characterIndex;
 			side.slot = player->paletteId;
-			if (index == pickerSide()) {
+			if (pickedHere(index)) {
 				if (auto mine = picker::customFor(index, side.charId)) {
 					writeGamePalette(*mine, palette);
 					log("load side=%d: our picked custom palette (game slot %d is the fallback)", index, side.slot);
@@ -210,7 +211,7 @@ namespace ps {
 			int local = net::localSide();
 			auto &palette = SokuLib::Palette::currentPalette;
 
-			if (playerId == (SokuLib::sceneId == SokuLib::SCENE_SELECT ? 0 : local)) {
+			if (SokuLib::sceneId == SokuLib::SCENE_SELECT || playerId == local) {
 				if (auto mine = picker::customFor(playerId, charId))
 					writeGamePalette(*mine, palette);
 			}
