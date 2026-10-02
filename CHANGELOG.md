@@ -9,11 +9,21 @@
   Turned off when palette-picker is loaded.
 - Picker layout: a compact panel next to the game's palette preview with the list, "You" and "Others"
   previews (what players without PaletteShare see), the fallback and the opponent status.
-- D in the palette step edits the highlighted palette's fallback in place (Up/Down, D save, B cancel).
+- The random-select key (A on the default keyboard) in the palette step edits the highlighted
+  palette's fallback in place (Up/Down, A save, X cancel). Hints show the player's own key bindings
+  (key names, or PadN on a gamepad) instead of the game's button letters.
 - Palette menu (Profile, deck construction, a character, C): every palette's fallback, the character
   default, large previews, and a shortcut to the palette folder.
 - The picker steps aside while the game's submenus are open over the select screen.
 - An opponent palette identical to the one we'd show anyway is no longer treated as custom.
+- Palette files: every `.pal` palette-picker reads (game format, or the old Palette Editor's 256
+  colors, with or without the character name after them), JASC-PAL, RIFF PAL, `.act` (with color
+  count), and indexed or 16/24/32-bit `.bmp`. Files are size-capped and bounds-checked.
+- Files that can't be read are no longer silently ignored: the picker shows "N files skipped" and
+  the palette menu lists them with the reason.
+- The palette folders of all 20 characters are created at startup.
+- Fixed: a held confirm key chose the palette instantly, and a held arrow scrolled every frame.
+- Fixed: previews swayed left and right while animating (e.g. Reisen).
 
 ## 0.9.0 (2026-10-01)
 
