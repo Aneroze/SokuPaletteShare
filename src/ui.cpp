@@ -213,7 +213,25 @@ namespace ps::ui {
 		sprite.scaleX(_fit);
 		sprite.scaleY(_fit);
 		sprite.translate(x + _dx, y + _dy, 0);
+
+		// The preview is drawn scaled, so the texture is resampled. Linear filtering would blend
+		// in the transparent index 0's hidden color (dots along the outline), and wrap addressing
+		// the opposite edge of the image (a line along the top/left). Nearest-pixel sampling and
+		// clamped addressing avoid both and keep the pixel art crisp; the device's states are
+		// restored afterwards.
+		IDirect3DDevice9 *dev = SokuLib::pd3dDev;
+		constexpr D3DSAMPLERSTATETYPE STATES[] = {D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV};
+		constexpr DWORD OURS[] = {D3DTEXF_POINT, D3DTEXF_POINT, D3DTADDRESS_CLAMP, D3DTADDRESS_CLAMP};
+		DWORD saved[4] = {};
+		if (dev)
+			for (int i = 0; i < 4; i++) {
+				dev->GetSamplerState(0, STATES[i], &saved[i]);
+				dev->SetSamplerState(0, STATES[i], OURS[i]);
+			}
 		sprite.render();
+		if (dev)
+			for (int i = 0; i < 4; i++)
+				dev->SetSamplerState(0, STATES[i], saved[i]);
 	}
 
 	void PalettePreview::clear()
