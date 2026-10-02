@@ -190,26 +190,21 @@ namespace ps::ui {
 			return;
 		_manager->Update();
 		// The select-screen effect renderer ignores renderInfos.scale, so draw the current pose
-		// ourselves: start from its base coordinates (relative to the sprite's anchor), scale,
-		// move into place.
-		// Fit the pose into maxHeight and place it by its bottom center at (x, y), measuring the
-		// actual quad, since each character's sprite is offset differently. Measured once, on the
-		// first frame: the coordinates are relative to the sprite's anchor, so reusing the same scale
-		// and offset keeps the anchor still like the game's own preview does. Re-measuring every
-		// frame would re-center each idle frame on its own width and make the sprite sway.
+		// ourselves. Its base quad is the frame's image at (0, 0), and the frame's offset is the
+		// anchor inside that image (about the feet), which differs from frame to frame. Moving each
+		// frame by its own offset keeps the anchor still, like the game's preview; without it, idle
+		// frames of different widths sway (Reisen's). Fit to maxHeight and put the first frame's
+		// bottom center at (x, y), measured once and kept for the other frames.
 		auto &sprite = _sprite->sprite;
 		sprite.loadTransform();
+		if (auto frame = _sprite->frameData)
+			sprite.translate(-frame->offset.x, -frame->offset.y, 0);
 		if (!_placed) {
-			auto bounds = [&](float &minX, float &maxX, float &minY, float &maxY) {
-				minX = minY = 1e9f;
-				maxX = maxY = -1e9f;
-				for (auto &c : sprite.transfCoords) {
-					minX = std::min(minX, c.x); maxX = std::max(maxX, c.x);
-					minY = std::min(minY, c.y); maxY = std::max(maxY, c.y);
-				}
-			};
-			float minX, maxX, minY, maxY;
-			bounds(minX, maxX, minY, maxY);
+			float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f;
+			for (auto &c : sprite.transfCoords) {
+				minX = std::min(minX, c.x); maxX = std::max(maxX, c.x);
+				minY = std::min(minY, c.y); maxY = std::max(maxY, c.y);
+			}
 			_fit = maxY > minY ? std::min(1.f, maxHeight / (maxY - minY)) : 1.f;
 			_dx = -(minX + maxX) / 2 * _fit;
 			_dy = -maxY * _fit;

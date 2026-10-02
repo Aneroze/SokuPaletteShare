@@ -46,7 +46,7 @@ namespace ps::ui {
 		int _charId = -1;
 		std::string _key;
 		float _x = -1, _y = -1;
-		bool _placed = false;    // _fit/_dx/_dy measured on the first frame, then kept
+		bool _placed = false;    // _fit/_dx/_dy measured on the first frame, then kept (anchored)
 		float _fit = 1, _dx = 0, _dy = 0;
 	};
 
