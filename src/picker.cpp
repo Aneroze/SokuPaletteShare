@@ -6,6 +6,7 @@
 #include "ui.hpp"
 #include <windows.h>
 #include <SokuLib.hpp>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -265,11 +266,27 @@ namespace ps::picker {
 			}
 		}
 
+		// SetInputs counts held frames incrementally (a key held for 2 frames reads 2), so the
+		// counters we overwrite must be put back before it runs again: otherwise a held Z would
+		// read as a fresh press (a == 1) on the next frame and a held arrow would step every frame.
+		SokuLib::KeyInput g_realKeys;
+		SokuLib::KeyInput g_writtenKeys;
+		bool g_overridden = false;
+
 		void __fastcall onSetInputs(void *mgr, void *edx)
 		{
+			bool ours = !g_disabled && reinterpret_cast<DWORD>(mgr) == MENU_KEYS;
+			auto &in = *reinterpret_cast<SokuLib::KeyInput *>(reinterpret_cast<char *>(mgr) + KEYINPUT_OFFSET);
+			if (ours && g_overridden && memcmp(&in, &g_writtenKeys, sizeof(in)) == 0)
+				in = g_realKeys;  // untouched since our override (the game didn't reset them)
+			g_overridden = false;
 			orig_setInputs(mgr, edx);
-			if (!g_disabled && reinterpret_cast<DWORD>(mgr) == MENU_KEYS)
-				drive(static_cast<SokuLib::KeymapManager *>(mgr));
+			if (!ours)
+				return;
+			g_realKeys = in;
+			drive(static_cast<SokuLib::KeymapManager *>(mgr));
+			g_writtenKeys = in;
+			g_overridden = memcmp(&g_realKeys, &g_writtenKeys, sizeof(in)) != 0;
 		}
 
 		// --- drawing ---------------------------------------------------------------------------
