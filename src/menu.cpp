@@ -105,8 +105,20 @@ namespace ps::menu {
 						SokuLib::MenuCursor::render(listX - 4, ry, 300);
 					drawRow(r, listX, ry);
 				}
-				if (_lib.palettes.empty())
+				if (!_lib.skipped.empty()) {
+					// Files that look like palettes but couldn't be read, with the reason.
+					constexpr size_t SHOWN = 4;
+					float sy = listY + VISIBLE_ROWS * rowH + 4;
+					_text.draw("Skipped (couldn't read):", listX, sy);
+					for (size_t i = 0; i < std::min(SHOWN, _lib.skipped.size()); i++) {
+						auto &f = _lib.skipped[i];
+						_text.draw(ui::narrow(f.file) + ": " + f.reason, listX + 8, sy + 16 * (i + 1));
+					}
+					if (_lib.skipped.size() > SHOWN)
+						_text.draw("and " + std::to_string(_lib.skipped.size() - SHOWN) + " more", listX + 8, sy + 16 * (SHOWN + 1));
+				} else if (_lib.palettes.empty()) {
 					_text.draw("No palettes yet: put .pal/.act/.bmp files in the folder.", listX, y + h - 60);
+				}
 
 				// Previews for the highlighted palette
 				const float px = x + 360;

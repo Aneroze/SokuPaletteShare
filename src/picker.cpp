@@ -325,6 +325,8 @@ namespace ps::picker {
 
 			// Header and the list: the highlighted entry with one above and one below
 			g_text.draw("Palette  " + std::to_string(pick.index + 1) + "/" + std::to_string(pick.count()), x + 8, y + 2);
+			if (size_t n = pick.lib.skipped.size())  // the palette menu lists them with the reason
+				g_text.draw(std::to_string(n) + (n == 1 ? " file skipped" : " files skipped"), x + 92, y + 2);
 			const float listY = y + 18 + ROW;
 			SokuLib::MenuCursor::render(x + 6, listY, 160);
 			for (int d = -1; d <= 1; d++)

@@ -5,9 +5,10 @@
 #include <vector>
 #include "palette.hpp"
 
-// The player's own palettes: modules/PaletteShare/palettes/<character>/ holds .pal (game format, or
-// 1024 raw 32-bit colors), .act (Photoshop color table) and .bmp (indexed color table, or the first
-// 256 pixels of a true-color image) files. palettes.ini in the same folder stores the fallbacks:
+// The player's own palettes: modules/PaletteShare/palettes/<character>/ holds .pal (game format,
+// JASC-PAL, RIFF PAL, or the old Palette Editor's 256 raw 32-bit colors), .act (Photoshop color
+// table) and .bmp (indexed color table, or the first 256 pixels of a 16/24/32-bit image) files.
+// Files that can't be read are listed with the reason, so the player can see why. palettes.ini in the same folder stores the fallbacks:
 //
 //   [default]
 //   fallback=0        ; slot used by palettes that have no fallback of their own (default 0)
@@ -27,12 +28,18 @@ namespace ps {
 		bool fallbackIsDefault = true;  // no fallback of its own; uses the character default
 	};
 
+	struct SkippedFile {
+		std::wstring file;            // file name with extension
+		std::string reason;
+	};
+
 	struct CharacterLibrary {
 		int charId = -1;
 		std::wstring folderName;
 		std::filesystem::path folder;
 		int defaultFallback = 0;
 		std::vector<LibraryPalette> palettes;  // sorted by name
+		std::vector<SkippedFile> skipped;      // palette-like files that couldn't be read
 		std::wstring lastSelected;             // "" = a vanilla slot (see lastSlot)
 		int lastSlot = -1;
 	};
@@ -48,5 +55,6 @@ namespace ps {
 	// The slot used by palettes without their own fallback.
 	void setDefaultFallback(int charId, int slot);
 
-	std::optional<Palette> readPaletteFile(const std::filesystem::path &file);
+	// whyNot (optional) gets a short reason when the file can't be read.
+	std::optional<Palette> readPaletteFile(const std::filesystem::path &file, const char **whyNot = nullptr);
 }

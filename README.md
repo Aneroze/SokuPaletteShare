@@ -19,9 +19,26 @@ character is shown with, and the other game uses them.
 
 ## Your own palettes (picker)
 
-Put palette files in `modules\PaletteShare\palettes\<character>\` (`.pal`, `.act` or `.bmp`). The
-folder name is the game's internal one, e.g. `reimu`, `udonge`, `utsuho`, and the folders are
-created on first use.
+Put palette files in `modules\PaletteShare\palettes\<character>\`. The folder name is the game's
+internal one (e.g. `reimu`, `udonge` for Reisen, `utsuho` for Okuu, `chirno` for Cirno, `meirin`
+for Meiling). The folders of all 20 characters are created when the game starts. The file name
+(without extension) is the palette's name in the picker. New files show up the next time you open
+that character's palette step; no restart needed.
+
+Supported files:
+- `.pal`: the game's own format (513 or 1025 bytes, e.g. a shady-loader `paletteNNN.pal`), the old
+  Palette Editor format (256 colors in 1024 bytes, with or without the character's name appended),
+  JASC-PAL (GIMP, Aseprite, Paint Shop Pro) and RIFF PAL (Microsoft).
+- `.act`: Adobe color table (Photoshop).
+- `.bmp`: an indexed image (its color table is the palette), or a 16/24/32-bit image whose first 256
+  pixels (row by row from the top) are the colors. Uncompressed only.
+
+Every `.pal` that palette-picker reads works here too. One difference: palette-picker reads 24-bit
+BMP images with red and blue swapped, so such a file made to look right there shows those two colors
+swapped here (PaletteShare reads it correctly).
+
+A file PaletteShare can't read isn't silently ignored: the picker shows "N files skipped", and the
+palette menu lists each one with the reason (e.g. "compressed BMP (save it uncompressed)").
 
 **At character select**, in the palette step:
 - Up/Down scroll through the 8 normal palettes and your own.
