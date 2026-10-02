@@ -427,12 +427,13 @@ namespace ps::picker {
 
 		// Panel layout (in the 640x480 game frame): right of the game's own palette preview and deck
 		// box, ending above the profile-name line. Left: header, 3 list rows, 2 info lines. Right:
-		// two small previews, "You" (the custom palette) and "Others" (the fallback slot).
+		// two small previews, "Custom" (the custom palette) and "Fallback NN" (the slot players
+		// without PaletteShare see).
 		// Note: the game's text renderer treats '<' as markup, so no angle brackets in strings.
 		constexpr float PANEL_X = 132, PANEL_W = 300, PANEL_H = 96;
 		constexpr float PANEL_Y[2] = {44, 324};
 		constexpr float ROW = 14;
-		constexpr float YOU_X = 196, OTHERS_X = 258;  // preview centers, relative to the panel
+		constexpr float CUSTOM_X = 200, FALLBACK_X = 262;  // preview centers, relative to the panel
 		constexpr float PREVIEW_HEIGHT = 75;
 
 		// What the pick's player presses for a game button.
@@ -460,15 +461,10 @@ namespace ps::picker {
 			auto custom = pick.custom();
 			if (custom) {
 				int slot = pick.target();
-				g_text.draw("You", x + YOU_X - 10, y + 2);
-				// "(original)": this game shows the slot differently (a palette mod replaces it), and
-				// the preview shows what players without palette mods see instead.
-				if (ui::slotDiffersFromOriginal(pick.charId, slot))
-					g_text.draw("Others 0" + std::to_string(slot) + " (original)", x + OTHERS_X - 46, y + 2);
-				else
-					g_text.draw("Others 0" + std::to_string(slot), x + OTHERS_X - 26, y + 2);
-				g_customPreview[player].showPalette(pick.charId, custom->palette, x + YOU_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
-				g_fallbackPreview[player].showSlot(pick.charId, slot, x + OTHERS_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
+				g_text.draw("Custom", x + CUSTOM_X - 20, y + 2);
+				g_text.draw("Fallback 0" + std::to_string(slot), x + FALLBACK_X - 30, y + 2);
+				g_customPreview[player].showPalette(pick.charId, custom->palette, x + CUSTOM_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
+				g_fallbackPreview[player].showSlot(pick.charId, slot, x + FALLBACK_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
 			} else {
 				g_customPreview[player].clear();
 				g_fallbackPreview[player].clear();
@@ -492,6 +488,10 @@ namespace ps::picker {
 				fallback = ui::slotName(custom->fallback) + " taken, others see 0" + std::to_string(pick.bumped(custom->fallback));
 			else if (pick.unreachable == custom->fallback)
 				fallback = ui::slotName(custom->fallback) + " can't be reached";
+			else if (ui::slotDiffersFromOriginal(pick.charId, custom->fallback))
+				// a palette mod replaces the slot in this game; the preview shows what players
+				// without palette mods see
+				fallback = "Fallback 0" + std::to_string(custom->fallback) + ": original colors";
 			g_text.draw(fallback, x + 8, infoY);
 
 			switch (net::peerStatus()) {

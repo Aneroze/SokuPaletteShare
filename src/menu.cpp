@@ -124,14 +124,14 @@ namespace ps::menu {
 				const float px = x + 360;
 				if (isPaletteRow()) {
 					auto &p = _lib.palettes[_row];
-					_text.draw("PaletteShare users see", px - 10, y + 50);
+					_text.draw("Custom (PaletteShare users see it)", px - 10, y + 50);
 					_custom.showPalette(_charId, p.palette, px + 70, y + 190, 120);
-					_text.draw("Others see " + ui::slotName(p.fallback), px - 10, y + 210);
+					_text.draw("Fallback " + ui::slotName(p.fallback) + " (everyone else)", px - 10, y + 210);
 					_fallback.showSlot(_charId, p.fallback, px + 70, y + 350, 120);
 					drawOriginalNote(p.fallback, px - 10, y + 354);
 				} else if (isDefaultRow()) {
 					_custom.clear();
-					_text.draw("Default fallback", px - 10, y + 210);
+					_text.draw("Character default fallback", px - 10, y + 210);
 					_fallback.showSlot(_charId, _lib.defaultFallback, px + 70, y + 350, 120);
 					drawOriginalNote(_lib.defaultFallback, px - 10, y + 354);
 				} else {

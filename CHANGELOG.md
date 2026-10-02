@@ -7,8 +7,9 @@
   0) that the picker shows and steers the game to, so players without PaletteShare see exactly that
   slot. Confirm waits until the game is on the fallback slot. Last choice remembered per character.
   Turned off when palette-picker is loaded.
-- Picker layout: a compact panel next to the game's palette preview with the list, "You" and "Others"
-  previews (what players without PaletteShare see), the fallback and the opponent status.
+- Picker layout: a compact panel next to the game's palette preview with the list, "Custom" and "Fallback"
+  previews (the fallback is what players without PaletteShare see), the fallback and the opponent
+  status.
 - The random-select key (A on the default keyboard) in the palette step edits the highlighted
   palette's fallback in place (Up/Down, A save, X cancel). Hints show the player's own key bindings
   (key names, or PadN on a gamepad) instead of the game's button letters.
@@ -26,9 +27,9 @@
 - Files that can't be read are no longer silently ignored: the picker shows "N files skipped" and
   the palette menu lists them with the reason.
 - The palette folders of all 20 characters are created at startup.
-- "Others" previews show the game's original colors for the fallback slot, read straight from its
-  .dat archives, so a palette mod replacing that slot in your own game no longer misleads you. The
-  label adds "(original)" when your game shows the slot differently.
+- Fallback previews show the game's original colors for the slot, read straight from its .dat
+  archives, so a palette mod replacing that slot in your own game no longer misleads you. The panel
+  says "original colors" when your game shows the slot differently.
 - Mirror matches follow the game's rule: the other side's palette is skipped in the list, and a
   taken fallback slot moves to the next one for that match ("Default 05 taken, others see 06").
   Before, the picker probed for the taken slot (repeated menu sounds) and could still give both

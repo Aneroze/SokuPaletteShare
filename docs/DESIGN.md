@@ -94,8 +94,7 @@ mid-match by the next battle render.
     the default ("Fallback: Default 00 (default)" vs "Fallback: Default 03"). The player can set
     it in the picker (cycling slots with the fallback preview updating). It's saved with the
     palette and can be changed at any time;
-  - the picker shows the custom and fallback previews side by side ("PaletteShare users see" /
-    "others see Default 0N");
+  - the picker shows the custom and fallback previews side by side ("Custom" / "Fallback 0N");
   - in netplay, live status once the handshake settles: opponent has PaletteShare → custom,
     doesn't → "they'll see Default 0N", unknown → checking. The same slot is what spectators and
     replay viewers without the mod see;

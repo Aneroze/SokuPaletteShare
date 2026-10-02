@@ -43,13 +43,13 @@ palette menu lists each one with the reason (e.g. "compressed BMP (save it uncom
 **At character select**, in the palette step (keyboard or gamepad; offline both sides get the
 picker: player 2 in VS Player, or player 1 choosing for the CPU or the Practice dummy):
 - Up/Down scroll through the 8 normal palettes and your own.
-- A panel shows the list, your palette (**You**) and what players without PaletteShare see
-  (**Others**), plus the palette's fallback. **Others** shows the game's original colors for the
-  fallback slot, read from the game's own archives: if a palette mod (e.g. a shady-loader package)
-  replaces that slot in your game, players without palette mods still see the original, and the
-  label says "(original)".
+- A panel shows the list and two previews: **Custom** (your palette, what PaletteShare users see)
+  and **Fallback NN** (the slot players without PaletteShare see). The fallback preview shows the
+  game's original colors, read from the game's own archives: if a palette mod (e.g. a shady-loader
+  package) replaces that slot in your game, players without palette mods still see the original,
+  and the panel says "original colors".
 - The **random-select key** (**A** on the default keyboard layout, Pad3 on a gamepad) changes the
-  highlighted palette's fallback: Up/Down pick a slot (the Others preview follows), A saves, X
+  highlighted palette's fallback: Up/Down pick a slot (the Fallback preview follows), A saves, X
   cancels. This replaces the game's random palette in that step; on the character grid the key
   still picks a random character.
 
@@ -57,8 +57,7 @@ Keys below are the default keyboard ones (Z confirm, X cancel, C submenu, A rand
 hints show your own bindings.
 
 **The palette menu**: Profile → deck construction → choose a character → **C**. It lists that
-character's palettes with their fallbacks and large previews ("PaletteShare users see" / "Others
-see"):
+character's palettes with their fallbacks and large previews ("Custom" / "Fallback"):
 - Left/Right change the highlighted palette's fallback.
 - C returns it to the character default.
 - The "Character default" row sets the default for every palette without its own (slot 0 unless
