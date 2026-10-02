@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 (not released yet: needs the two-PC test, see docs/RELEASING.md)
 
 - Own palette picker (first version): palettes from `palettes/<character>/`, scrolled with Up/Down in
   the palette step. Each palette has an explicit fallback slot (palettes.ini, per-character default

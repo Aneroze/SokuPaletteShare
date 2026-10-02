@@ -83,7 +83,7 @@ mid-match by the next battle render.
   palettes. See the tests below.
 - [ ] **1.0.0**: a two-PC test over the internet, then a public repo and a SokuLauncher listing
   (see `docs/RELEASING.md`).
-- [ ] **M1 own picker** (first version working 2026-10-01, see below): custom palettes from a folder (`.pal` / `.act` / `.bmp`) and a picker at
+- [x] **M1 own picker** (done for 1.0.0, 2026-10-02; Soku2/modded characters deferred indefinitely): custom palettes from a folder (`.pal` / `.act` / `.bmp`) and a picker at
   character select, replacing palette-picker. Requirement (user, 2026-10-01): **the fallback must
   be obvious.** Players without PaletteShare only get the slot number, so:
   - every custom palette is paired with an explicit fallback slot 0–7, the slot the game actually
@@ -155,8 +155,9 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
   `0x89A248`. The picker stands down while `menuManager` is non-empty (the C submenu over the
   select screen). All verified in Practice: fallback 5 → game slot 5 → match with the custom
   palette.
-  Still to do for M1: verifying the mirror-match rule, fallback previews from the original `.dat`,
-  player 2 in offline modes, Soku2 characters.
+  2026-10-02: mirror rule (the game's: skip the other side's slot and palette, bump a taken
+  fallback for that match), fallback previews from the original `.dat` archives, both sides offline
+  and gamepads, netplay re-verified. Soku2/modded characters: deferred indefinitely (user).
 
 ## Open questions
 
