@@ -86,6 +86,17 @@ namespace ps {
 			return local < 0 ? -1 : 1 - local;
 		}
 
+		// Okuu's cloak: the inside (color 31) is magenta in her normal palettes, where the game draws
+		// something over it (the starfield, presumably), and dark navy in the "b" palettes it loads
+		// instead with configex123.ini [etc] limit=1 (0x467B29). That depends on the viewer's own
+		// setting, so whatever palette we show on Okuu keeps the viewer's own color there.
+		constexpr int OKUU_CLOAK = 31;
+
+		Palette fitToViewer(int charId, const Palette &palette, const Palette &own)
+		{
+			return charId == game::CHARACTER_UTSUHO ? withColorOf(palette, own, OKUU_CLOAK) : palette;
+		}
+
 		// The palette to offer as "custom" for a side: the one the replay being watched recorded, else
 		// the debug force, else the opponent's: the one they offered for this slot, or (character
 		// select previews, anySlot) the one they show now.
@@ -106,7 +117,7 @@ namespace ps {
 			}
 			if (!palette)
 				return std::nullopt;
-			auto checked = lockTransparency(*palette, reference);
+			auto checked = fitToViewer(charId, lockTransparency(*palette, reference), reference);
 			if (hashPalette(checked) == hashPalette(reference))
 				return std::nullopt;  // the opponent uses the same palette we'd show anyway
 			return checked;
@@ -278,6 +289,7 @@ namespace ps {
 			std::optional<Palette> picked;  // the custom palette chosen here, recorded for replays
 			if (pickedHere(index)) {
 				if (auto mine = picker::customFor(index, side.charId)) {
+					*mine = fitToViewer(side.charId, *mine, readGamePalette(palette));
 					if (looksLikeSide0(index, side.charId, *mine)) {
 						log("load side=%d: our custom palette is the same as side 0's (mirror), using game slot %d", index, side.slot);
 					} else {
@@ -357,7 +369,7 @@ namespace ps {
 
 			if (SokuLib::sceneId == SokuLib::SCENE_SELECT || playerId == local) {
 				if (auto mine = picker::previewFor(playerId, charId, slot))
-					writeGamePalette(*mine, palette);
+					writeGamePalette(fitToViewer(charId, *mine, readGamePalette(palette)), palette);
 			}
 			if (local < 0)
 				return;

@@ -8,6 +8,7 @@ namespace ps::game {
 	constexpr DWORD SELECT_SCENE = 0x8A000C;      // Select * of the current character select
 	constexpr DWORD CHARACTER_NAME = 0x43F3F0;    // const char *(int charId): internal name ("reimu")
 	constexpr int CHARACTER_COUNT = 20;           // the normal characters, 0..19
+	constexpr int CHARACTER_UTSUHO = 18;          // Okuu
 	constexpr int SE_MOVE = 0x27, SE_OK = 0x28, SE_BACK = 0x29;  // playSEWaveBuffer ids
 
 	// The character select scene object, checked by its vtable (sceneId alone can be a frame ahead

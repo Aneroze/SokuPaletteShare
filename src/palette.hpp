@@ -42,6 +42,10 @@ namespace ps {
 	// solid box.
 	Palette lockTransparency(const Palette &custom, const Palette &reference);
 
+	// `palette` with color `index` (and its transparency) taken from `from`, converted between 16 and
+	// 32 bits as needed.
+	Palette withColorOf(const Palette &palette, const Palette &from, int index);
+
 	// Whether two palettes show the same colors, compared at the 16-bit palettes' 5 bits per
 	// channel and ignoring transparency (so a 16-bit and a 32-bit copy of one palette match).
 	bool sameColors(const Palette &a, const Palette &b);

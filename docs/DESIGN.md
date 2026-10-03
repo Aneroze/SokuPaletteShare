@@ -207,3 +207,9 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
   stand-ins that fall back to older functions. Check with `dumpbin /imports` after toolset updates.
 - **Tests** (tests/tests.cpp, `tools\test.bat`): the game-free parts (sha256, base64, palette,
   palettefile, protocol, metaformat) plus a seeded fuzz pass over every parser.
+- **Okuu's cloak** (verified 2026-10-03): at 0x467B29 the game loads `paletteNNNb` instead of
+  `paletteNNN` for Okuu (character 18) when configex123.ini [etc] limit=1. The two differ only at
+  color 31 (the cloak's inside: magenta, drawn over by the game, vs dark navy). Every palette we
+  show on Okuu takes color 31 from the palette the viewer's game loaded (`fitToViewer` in
+  hooks.cpp). Test: limit=1, Okuu's normal palette 0 forced -> shown palette identical to the
+  game's own palette000b.

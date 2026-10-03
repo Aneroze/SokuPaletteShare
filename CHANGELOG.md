@@ -11,6 +11,9 @@
   at each character select, and a stranger can't pass as the opponent once a match has started.
 - A palette arriving late is applied over a few frames instead of in one ~30 ms hitch.
 - Ctrl+P shows "Opponent palettes: ON/OFF" for 2 seconds.
+- Okuu: any palette PaletteShare shows on her keeps the viewer's own color for the inside of her
+  cloak (color 31), which the game swaps with configex123.ini [etc] limit=1 (palette NNNb: navy
+  instead of the magenta it draws over). Before, a magenta cloak could show with limit=1.
 - Logging is on by default (2 MB per run) and starts with a line about Windows/Wine and the mods
   that matter; palette names show as Shift-JIS in game (Japanese names display correctly).
 - Palette files are capped at 64 KB (.pal/.act) and 4 MB (.bmp); a damaged cache file is replaced.

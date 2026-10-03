@@ -101,6 +101,34 @@ namespace ps {
 		return out;
 	}
 
+	// A color as A8R8G8B8, whatever the palette's depth.
+	static uint32_t argbAt(const Palette &p, int i)
+	{
+		if (p.bpp == 32) {
+			uint32_t c;
+			memcpy(&c, &p.colors[i * 4], 4);
+			return c;
+		}
+		uint32_t v = p.colors[i * 2] | p.colors[i * 2 + 1] << 8;
+		auto expand = [](uint32_t five) { return five << 3 | five >> 2; };
+		return (v & 0x8000 ? 0xFF000000u : 0) | expand(v >> 10 & 31) << 16 | expand(v >> 5 & 31) << 8 | expand(v & 31);
+	}
+
+	Palette withColorOf(const Palette &palette, const Palette &from, int index)
+	{
+		Palette out = palette;
+		if (!palette.valid() || !from.valid() || index < 0 || index > 255)
+			return out;
+		uint32_t c = argbAt(from, index);
+		if (out.bpp == 32) {
+			memcpy(&out.colors[index * 4], &c, 4);
+		} else {
+			uint16_t v = static_cast<uint16_t>((c >> 24 >= 0x80 ? 0x8000 : 0) | (c >> 19 & 31) << 10 | (c >> 11 & 31) << 5 | (c >> 3 & 31));
+			memcpy(&out.colors[index * 2], &v, 2);
+		}
+		return out;
+	}
+
 	static uint16_t rgb555At(const Palette &p, int i)
 	{
 		if (p.bpp == 16)

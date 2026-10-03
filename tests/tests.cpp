@@ -152,6 +152,17 @@ namespace {
 			CHECK((locked.colors[i * 2 + 1] & 0x7F) == (custom.colors[i * 2 + 1] & 0x7F));
 		}
 		CHECK(sameColors(custom, locked));
+
+		// withColorOf: one color taken over, across depths both ways.
+		auto p16 = testPalette(16, 1), p32 = testPalette(32, 2);
+		auto a = withColorOf(p16, p32, 31);
+		auto expect = withColorOf(testPalette(16, 99), p32, 31);
+		CHECK(memcmp(&a.colors[62], &expect.colors[62], 2) == 0);
+		CHECK(memcmp(&a.colors[0], &p16.colors[0], 62) == 0 && memcmp(&a.colors[64], &p16.colors[64], 512 - 64) == 0);
+		auto b = withColorOf(p32, p16, 31);
+		CHECK(memcmp(&b.colors[0], &p32.colors[0], 124) == 0);
+		Palette back16 = withColorOf(p16, b, 31);
+		CHECK(memcmp(&back16.colors[62], &p16.colors[62], 2) == 0);  // 16 -> 32 -> 16 is exact
 	}
 
 	void testProtocol()
