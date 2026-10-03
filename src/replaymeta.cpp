@@ -1,4 +1,6 @@
 #include "replaymeta.hpp"
+#include "metaformat.hpp"
+#include "patch.hpp"
 #include "log.hpp"
 #include <windows.h>
 #include <cstring>
@@ -18,21 +20,16 @@
 //             Called by the replay menu (0x44B3F1) and directly by ReplayDnD, whose CreateFileA hook
 //             maps that path to the real file (so our own CreateFileA of it finds the real file too).
 //
-// Both start with the compiler's SEH prologue (push -1; push imm32, 7 bytes), which we move to a
-// trampoline. If another mod already put a jump there, we jump to it instead.
+// Both are hooked at their entry (patch::entry: the SEH prologue moves to a trampoline, or another
+// mod's jump there is chained).
 
 namespace ps::meta {
 	namespace {
 		constexpr DWORD WRITE_REPLAY = 0x42B2D0;
 		constexpr DWORD READ_REPLAY = 0x42EAC0;
-		constexpr DWORD MAX_SIDECAR = 4 * 1024 * 1024;
-		constexpr DWORD INPUT_COUNT_OFFSET = 0x77;  // u32, then 2 bytes per input
-		constexpr DWORD INPUTS_OFFSET = 0x7B;
-		constexpr char MAGIC[8] = {'S', 'O', 'K', 'U', 'M', 'E', 'T', 'A'};
-		constexpr DWORD FOOTER_SIZE = 16;
 
 		Storage g_storage = Storage::Sidecar;
-		std::mutex g_mutex;
+		std::timed_mutex g_mutex;
 		std::map<std::string, nlohmann::json> g_pending;  // for the next saved replay
 		std::set<std::string> g_owned;  // keys we write: removed from a sidecar when we have nothing for them
 		nlohmann::json g_watched;                         // the watched replay's sidecar (object or null)
@@ -70,97 +67,40 @@ namespace ps::meta {
 			return n && n < std::size(buffer) ? std::wstring(buffer, n) : wide(path);
 		}
 
-		// Copying or printing a JSON value recurses once per nesting level, so a file nested millions
-		// of levels deep (it only takes brackets) would overflow the stack: refuse anything deeper
-		// than any real metadata needs.
-		constexpr int MAX_DEPTH = 32;
+		using format::parseObject;
+		constexpr size_t MAX_REPLAY = 64 * 1024 * 1024;  // far above any real replay
 
-		bool shallowEnough(const std::string &text)
-		{
-			int depth = 0;
-			bool inString = false, escaped = false;
-			for (char c : text) {
-				if (inString) {
-					if (escaped)
-						escaped = false;
-					else if (c == '\\')
-						escaped = true;
-					else if (c == '"')
-						inString = false;
-				} else if (c == '"') {
-					inString = true;
-				} else if (c == '{' || c == '[') {
-					if (++depth > MAX_DEPTH)
-						return false;
-				} else if (c == '}' || c == ']') {
-					depth--;
-				}
-			}
-			return true;
-		}
-
-		std::optional<nlohmann::json> parseObject(const std::string &text)
-		{
-			if (!shallowEnough(text))
-				return std::nullopt;
-			auto parsed = nlohmann::json::parse(text, nullptr, false);
-			if (parsed.is_discarded() || !parsed.is_object())
-				return std::nullopt;
-			return parsed;
-		}
-
-		uint32_t crc32(const uint8_t *data, size_t size)
-		{
-			uint32_t crc = 0xFFFFFFFF;
-			for (size_t i = 0; i < size; i++) {
-				crc ^= data[i];
-				for (int k = 0; k < 8; k++)
-					crc = (crc >> 1) ^ (0xEDB88320 & (0 - (crc & 1)));
-			}
-			return ~crc;
-		}
-
-		uint32_t get32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | static_cast<uint32_t>(p[3]) << 24; }
-		void put32(std::string &out, uint32_t v) { for (int i = 0; i < 4; i++) out += static_cast<char>(v >> (8 * i) & 0xFF); }
-
-		bool readAt(HANDLE file, DWORD offset, void *out, DWORD size)
-		{
-			DWORD got = 0;
-			return SetFilePointer(file, offset, nullptr, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
-			       ReadFile(file, out, size, &got, nullptr) && got == size;
-		}
-
-		// Where the game's data ends: after the inputs. 0 when the file is too short for that.
-		DWORD gameDataEnd(HANDLE file, DWORD fileSize)
-		{
-			uint8_t count[4];
-			if (fileSize < INPUTS_OFFSET || !readAt(file, INPUT_COUNT_OFFSET, count, 4))
-				return 0;
-			uint64_t end = INPUTS_OFFSET + uint64_t(get32(count)) * 2;
-			return end <= fileSize ? static_cast<DWORD>(end) : 0;
-		}
-
-		// The metadata appended to a .rep, if there is a valid one.
-		std::optional<nlohmann::json> readRep(const char *replay)
+		// The whole file, opened like the game opened it (CreateFileA: ReplayDnD's mapping applies).
+		std::optional<std::vector<uint8_t>> readWhole(const char *replay)
 		{
 			HANDLE file = CreateFileA(replay, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 			if (file == INVALID_HANDLE_VALUE)
 				return std::nullopt;
 			DWORD size = GetFileSize(file, nullptr);
-			DWORD end = gameDataEnd(file, size);
-			uint8_t footer[FOOTER_SIZE];
-			std::string text;
-			bool found = end && size >= end + FOOTER_SIZE && readAt(file, size - FOOTER_SIZE, footer, FOOTER_SIZE) &&
-			             !memcmp(footer + 8, MAGIC, 8) && get32(footer) <= MAX_SIDECAR && end + get32(footer) + FOOTER_SIZE == size;
-			if (found) {
-				text.resize(get32(footer));
-				found = readAt(file, end, text.data(), static_cast<DWORD>(text.size())) &&
-				        crc32(reinterpret_cast<const uint8_t *>(text.data()), text.size()) == get32(footer + 4);
+			std::optional<std::vector<uint8_t>> data;
+			if (size != INVALID_FILE_SIZE && size <= MAX_REPLAY) {
+				data.emplace(size);
+				DWORD got = 0;
+				if (!ReadFile(file, data->data(), size, &got, nullptr) || got != size)
+					data.reset();
 			}
 			CloseHandle(file);
-			if (!found)
-				return std::nullopt;
-			return parseObject(text);
+			return data;
+		}
+
+		// The metadata appended to a .rep, if there is a valid one.
+		std::optional<nlohmann::json> readRep(const char *replay)
+		{
+			auto data = readWhole(replay);
+			auto text = data ? format::trailerOf(data->data(), data->size()) : std::nullopt;
+			return text ? parseObject(*text) : std::nullopt;
+		}
+
+		// Whether a replay ends exactly where the game's data ends (so nothing is appended yet).
+		bool endsAtGameData(const std::vector<uint8_t> &data)
+		{
+			auto end = format::gameDataEnd(data.data(), data.size(), data.size());
+			return end && *end == data.size();
 		}
 
 		void appendToRep(const char *replay, const std::map<std::string, nlohmann::json> &pending)
@@ -175,22 +115,17 @@ namespace ps::meta {
 				log("meta: can't serialize the metadata for %s", replay);
 				return;
 			}
-			HANDLE file = CreateFileA(replay, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			auto data = readWhole(replay);
+			if (!data || !endsAtGameData(*data)) {
+				log("meta: %s doesn't end where its inputs end, not adding metadata", replay);
+				return;
+			}
+			HANDLE file = CreateFileA(replay, GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 			if (file == INVALID_HANDLE_VALUE) {
 				log("meta: can't open %s to add metadata (error %lu)", replay, GetLastError());
 				return;
 			}
-			DWORD size = GetFileSize(file, nullptr);
-			DWORD end = gameDataEnd(file, size);
-			if (!end || end != size) {
-				log("meta: %s doesn't end where its inputs end (%lu / %lu bytes), not adding metadata", replay, end, size);
-				CloseHandle(file);
-				return;
-			}
-			std::string out = text;
-			put32(out, static_cast<uint32_t>(text.size()));
-			put32(out, crc32(reinterpret_cast<const uint8_t *>(text.data()), text.size()));
-			out.append(MAGIC, 8);
+			auto out = format::makeTrailer(text);
 			DWORD written = 0;
 			bool ok = SetFilePointer(file, 0, nullptr, FILE_END) != INVALID_SET_FILE_POINTER &&
 			          WriteFile(file, out.data(), static_cast<DWORD>(out.size()), &written, nullptr) && written == out.size();
@@ -206,7 +141,7 @@ namespace ps::meta {
 				return GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES ? std::optional(nlohmann::json::object()) : std::nullopt;
 			std::ostringstream text;
 			text << in.rdbuf();
-			if (text.str().size() > MAX_SIDECAR)
+			if (text.str().size() > format::MAX_METADATA)
 				return std::nullopt;
 			return parseObject(text.str());
 		}
@@ -214,13 +149,8 @@ namespace ps::meta {
 		// Whether the game really wrote this replay: it exists and ends where its inputs end.
 		bool writtenByGame(const char *replay)
 		{
-			HANDLE file = CreateFileA(replay, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-			if (file == INVALID_HANDLE_VALUE)
-				return false;
-			DWORD size = GetFileSize(file, nullptr);
-			DWORD end = gameDataEnd(file, size);
-			CloseHandle(file);
-			return end && end == size;
+			auto data = readWhole(replay);
+			return data && endsAtGameData(*data);
 		}
 
 		void writeMetadata(const char *replay)
@@ -228,10 +158,12 @@ namespace ps::meta {
 			std::map<std::string, nlohmann::json> pending;
 			std::set<std::string> owned;
 			{
-				// SaveRep can save from another thread while the game is crashing: never wait here.
-				std::unique_lock lock(g_mutex, std::try_to_lock);
-				if (!lock)
+				// SaveRep can save from another thread while the game is crashing: don't wait long.
+				std::unique_lock<std::timed_mutex> lock(g_mutex, std::chrono::milliseconds(200));
+				if (!lock) {
+					log("meta: busy, %s saved without metadata", replay);
 					return;
+				}
 				pending = g_pending;
 				owned = g_owned;
 			}
@@ -243,7 +175,9 @@ namespace ps::meta {
 			if (g_storage == Storage::Rep) {
 				if (!pending.empty())
 					appendToRep(replay, pending);
-				return;
+				pending.clear();  // and below: a stale sidecar of the same name loses our keys
+				if (GetFileAttributesW(sidecarOf(wide(replay)).c_str()) == INVALID_FILE_ATTRIBUTES)
+					return;
 			}
 
 			// A sidecar may already be there: other mods' keys, or one left behind by a deleted
@@ -281,6 +215,8 @@ namespace ps::meta {
 				}
 			}
 			bool ok = MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
+			if (!ok)
+				DeleteFileW(temp.c_str());
 			log("meta: %ls %s (%d key(s) from us, %u bytes)", file.c_str(), ok ? "written" : "NOT written", (int)pending.size(), (unsigned)text.size());
 		}
 
@@ -293,7 +229,7 @@ namespace ps::meta {
 			if (auto sidecar = readSidecar(file))
 				for (auto &[key, value] : sidecar->items())
 					content[key] = value;
-			std::lock_guard lock(g_mutex);
+			std::lock_guard<std::timed_mutex> lock(g_mutex);
 			g_watched = content.empty() ? nlohmann::json() : content;
 			if (!content.empty())
 				log("meta: watching a replay with %d key(s) (%d in the .rep, %d from %ls)", (int)content.size(), (int)inRep,
@@ -315,7 +251,7 @@ namespace ps::meta {
 		int __fastcall onReadReplay(void *self, void *edx, const char *path)
 		{
 			{
-				std::lock_guard lock(g_mutex);
+				std::lock_guard<std::timed_mutex> lock(g_mutex);
 				g_watched = nlohmann::json();
 			}
 			int result = orig_readReplay(self, edx, path);
@@ -324,61 +260,31 @@ namespace ps::meta {
 					readWatched(path);
 			} catch (...) {
 				log("meta: reading the metadata of %s failed", path);
-				std::lock_guard lock(g_mutex);
+				std::lock_guard<std::timed_mutex> lock(g_mutex);
 				g_watched = nlohmann::json();
 			}
 			return result;
 		}
 
-		// Jumps from a function's first 7 bytes to `hook`; returns a callable original, or null.
-		void *hookEntry(DWORD at, void *hook)
-		{
-			auto code = reinterpret_cast<uint8_t *>(at);
-			auto tramp = static_cast<uint8_t *>(VirtualAlloc(nullptr, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-			if (!tramp)
-				return nullptr;
-			bool prologue = code[0] == 0x6A && code[1] == 0xFF && code[2] == 0x68;  // push -1; push imm32
-			if (prologue) {
-				memcpy(tramp, code, 7);
-				tramp[7] = 0xE9;
-				*reinterpret_cast<DWORD *>(tramp + 8) = at + 7 - (reinterpret_cast<DWORD>(tramp) + 12);
-			} else if (code[0] == 0xE9) {  // another mod's jump: chain to it
-				DWORD target = at + 5 + *reinterpret_cast<int32_t *>(code + 1);
-				tramp[0] = 0xE9;
-				*reinterpret_cast<DWORD *>(tramp + 1) = target - (reinterpret_cast<DWORD>(tramp) + 5);
-			} else {
-				VirtualFree(tramp, 0, MEM_RELEASE);
-				return nullptr;
-			}
-			DWORD old;
-			VirtualProtect(code, 7, PAGE_EXECUTE_READWRITE, &old);
-			code[0] = 0xE9;
-			*reinterpret_cast<DWORD *>(code + 1) = reinterpret_cast<DWORD>(hook) - (at + 5);
-			if (prologue)
-				code[5] = code[6] = 0x90;
-			VirtualProtect(code, 7, old, &old);
-			FlushInstructionCache(GetCurrentProcess(), code, 7);
-			return tramp;
-		}
 	}
 
 	void setPending(const std::string &key, nlohmann::json value)
 	{
-		std::lock_guard lock(g_mutex);
+		std::lock_guard<std::timed_mutex> lock(g_mutex);
 		g_owned.insert(key);
 		g_pending[key] = std::move(value);
 	}
 
 	void clearPending(const std::string &key)
 	{
-		std::lock_guard lock(g_mutex);
+		std::lock_guard<std::timed_mutex> lock(g_mutex);
 		g_owned.insert(key);
 		g_pending.erase(key);
 	}
 
 	std::optional<nlohmann::json> watched(const std::string &key)
 	{
-		std::lock_guard lock(g_mutex);
+		std::lock_guard<std::timed_mutex> lock(g_mutex);
 		if (!g_watched.is_object())
 			return std::nullopt;
 		auto it = g_watched.find(key);
@@ -390,8 +296,8 @@ namespace ps::meta {
 	void install(Storage storage)
 	{
 		g_storage = storage;
-		orig_writeReplay = reinterpret_cast<Method>(hookEntry(WRITE_REPLAY, reinterpret_cast<void *>(&onWriteReplay)));
-		orig_readReplay = reinterpret_cast<Method>(hookEntry(READ_REPLAY, reinterpret_cast<void *>(&onReadReplay)));
+		orig_writeReplay = reinterpret_cast<Method>(patch::entry(WRITE_REPLAY, reinterpret_cast<const void *>(&onWriteReplay), "replay saving"));
+		orig_readReplay = reinterpret_cast<Method>(patch::entry(READ_REPLAY, reinterpret_cast<const void *>(&onReadReplay), "replay loading"));
 		log("meta: replay hooks %s (write %p, read %p), saving to %s", orig_writeReplay && orig_readReplay ? "installed" : "INCOMPLETE",
 			orig_writeReplay, orig_readReplay, storage == Storage::Rep ? "the .rep" : "sidecar files");
 	}

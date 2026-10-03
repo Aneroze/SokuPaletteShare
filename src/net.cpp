@@ -1,4 +1,8 @@
 #include "net.hpp"
+#include "game.hpp"
+#include "guard.hpp"
+#include "original.hpp"
+#include "patch.hpp"
 #include "hooks.hpp"
 #include "log.hpp"
 #include "protocol.hpp"
@@ -24,8 +28,10 @@ namespace ps::net {
 		constexpr ULONGLONG OFFER_INTERVAL_MS = 500;
 		constexpr int OFFER_MAX_SENDS = 60;       // resend until acked, up to ~30 s
 		constexpr size_t MAX_PENDING = 4;
-		constexpr int MAX_NEW_PALETTES = 32;  // per session: a peer can't fill our cache
-		constexpr ULONGLONG PLAY_REQUEST_WINDOW_MS = 60000;
+		// New custom palettes from the opponent per character select (a palette equal to the slot's
+		// original doesn't count): a peer can't fill our cache.
+		constexpr int MAX_NEW_PALETTES = 256;
+		constexpr int MAX_IGNORED_LOGS = 3;  // "ignored a HELLO" lines per session
 		constexpr uint8_t GAME_INIT_REQUEST = 0x05;  // the game's join packet: type, gameId[16],
 		constexpr size_t INIT_REQUEST_TYPE_AT = 25;   // unknown[8], u8 request type
 		constexpr uint8_t PLAY_REQUEST = 1;           // (0 = spectate)
@@ -127,14 +133,51 @@ namespace ps::net {
 			return obj->netUdp.opponent;
 		}
 
+		// Packets and disk writes queued under g_mutex and done after it's released: other mods hook
+		// sendto too (and may lock around it), and a slow disk mustn't stall the game's receive
+		// thread mid-match.
+		struct Outgoing {
+			std::vector<uint8_t> packet;
+			sockaddr_in to;
+		};
+		std::vector<Outgoing> g_outbox;
+		std::vector<std::pair<Palette, PaletteHash>> g_toStore;
+		int g_ignoredLogs = 0;
+		int g_lastScene = -1;
+
+		// Caller holds g_mutex.
 		void sendTo(const std::vector<uint8_t> &packet, const sockaddr_in &to)
 		{
+			g_outbox.push_back({packet, to});
+		}
+
+		// Caller doesn't hold g_mutex.
+		void flushOutbox()
+		{
+			std::vector<Outgoing> outbox;
+			{
+				std::lock_guard lock(g_mutex);
+				outbox.swap(g_outbox);
+			}
 			SOCKET s = gameSocket();
 			if (s == INVALID_SOCKET)
 				return;
 			auto send = *reinterpret_cast<SendTo *>(IAT_SENDTO);
-			send(s, reinterpret_cast<const char *>(packet.data()), static_cast<int>(packet.size()), 0,
-			     reinterpret_cast<const sockaddr *>(&to), sizeof(to));
+			for (auto &out : outbox)
+				send(s, reinterpret_cast<const char *>(out.packet.data()), static_cast<int>(out.packet.size()), 0,
+				     reinterpret_cast<const sockaddr *>(&out.to), sizeof(out.to));
+		}
+
+		// Our thread, without g_mutex.
+		void storeReceived()
+		{
+			std::vector<std::pair<Palette, PaletteHash>> toStore;
+			{
+				std::lock_guard lock(g_mutex);
+				toStore.swap(g_toStore);
+			}
+			for (auto &[palette, hash] : toStore)
+				cache.store(palette, hash);
 		}
 
 		void resetSession()
@@ -149,6 +192,7 @@ namespace ps::net {
 			g_remote.clear();
 			g_remoteBySlot.clear();
 			g_newPalettes = 0;
+			g_ignoredLogs = 0;
 			g_version = proto::VERSION;
 		}
 
@@ -159,19 +203,14 @@ namespace ps::net {
 				auto host = hostAddress();
 				return host && sameAddr(from, *host);
 			}
-			auto now = GetTickCount64();
-			bool anyRecent = false;
-			for (auto &request : g_playRequests) {
-				if (now - request.at > PLAY_REQUEST_WINDOW_MS)
-					continue;
-				anyRecent = true;
+			// The requests seen before this match (see notePlayRequest): the opponent is one of them.
+			for (auto &request : g_playRequests)
 				if (sameAddr(from, request.from))
 					return true;
-			}
-			if (!anyRecent) {
-				// We saw no play request at all (another mod may hide the game's packets from us):
+			if (g_playRequests.empty()) {
+				// We never saw a play request (another mod may hide the game's packets from us):
 				// rather than never sharing palettes, trust the first player that says hello.
-				log("net: no play request seen from anyone, accepting the HELLO unverified");
+				log("net: no play request ever seen, accepting the HELLO unverified");
 				return true;
 			}
 			return false;
@@ -184,7 +223,17 @@ namespace ps::net {
 			if (g_peerKnown && !sameAddr(from, g_peer))
 				return;
 			if (!g_peerKnown && !fromOpponent(from)) {
-				log("net: ignored a HELLO from %s:%d, not our opponent", inet_ntoa(from.sin_addr), ntohs(from.sin_port));
+				if (g_ignoredLogs++ < MAX_IGNORED_LOGS) {
+					std::string expected;
+					if (auto host = localSide() == 1 ? hostAddress() : std::nullopt)
+						expected = std::string(inet_ntoa(host->sin_addr)) + ":" + std::to_string(ntohs(host->sin_port));
+					else
+						for (auto &request : g_playRequests)
+							expected += std::string(expected.empty() ? "" : ", ") + inet_ntoa(request.from.sin_addr) + ":" +
+							            std::to_string(ntohs(request.from.sin_port));
+					std::string sender = std::string(inet_ntoa(from.sin_addr)) + ":" + std::to_string(ntohs(from.sin_port));
+					log("net: ignored a HELLO from %s, not our opponent (expected %s)", sender.c_str(), expected.empty() ? "?" : expected.c_str());
+				}
 				return;
 			}
 			// The highest version both sides speak; checked on every HELLO, so nothing sticks.
@@ -281,12 +330,15 @@ namespace ps::net {
 				log("net: dropped a palette from the opponent that doesn't match its hash");
 				return;
 			}
-			if (++g_newPalettes > MAX_NEW_PALETTES) {
+			// A slot's original palette can't be abusive, and browsing offers plenty of them.
+			auto original = game::normalCharacter(charId) ? original::palette(game::characterName(charId), slot) : std::nullopt;
+			if (!(original && sameColors(*original, *palette)) && ++g_newPalettes > MAX_NEW_PALETTES) {
 				if (g_newPalettes == MAX_NEW_PALETTES + 1)
-					log("net: the opponent sent more than %d new palettes this session, ignoring the rest", MAX_NEW_PALETTES);
+					log("net: the opponent sent more than %d new palettes in this character select, ignoring the rest", MAX_NEW_PALETTES);
 				return;
 			}
-			cache.store(*palette, chunk.hash);
+			cache.keep(*palette, chunk.hash);
+			g_toStore.emplace_back(*palette, chunk.hash);
 			remember(seq, charId, slot, chunk.hash, true);
 			sendTo(proto::makeAck(chunk.hash), from);
 		}
@@ -316,9 +368,13 @@ namespace ps::net {
 				onAck(*ack, from);
 		}
 
+		// The game's join requests to play us. Only those before a match count: during one the game
+		// turns new requests away, so a stranger can't become "the opponent" by sending one.
 		void notePlayRequest(const sockaddr_in &from)
 		{
 			std::lock_guard lock(g_mutex);
+			if (g_inSession)
+				return;
 			auto now = GetTickCount64();
 			for (auto &request : g_playRequests)
 				if (sameAddr(request.from, from)) {
@@ -343,8 +399,10 @@ namespace ps::net {
 						notePlayRequest(*reinterpret_cast<sockaddr_in *>(from));
 					return r;
 				}
-				if (from && fromlen && *fromlen >= static_cast<int>(sizeof(sockaddr_in)) && from->sa_family == AF_INET)
-					handle(reinterpret_cast<uint8_t *>(buf), r, *reinterpret_cast<sockaddr_in *>(from));
+				if (fromV4) {
+					guarded("network", [&] { handle(reinterpret_cast<uint8_t *>(buf), r, *reinterpret_cast<sockaddr_in *>(from)); });
+					guarded("network send", flushOutbox);
+				}
 				// Ours: hide it from the game and wait for the next datagram.
 			}
 		}
@@ -367,6 +425,19 @@ namespace ps::net {
 				g_inSession = session;
 				g_sessionStart = GetTickCount64();
 				log("net: %s netplay session", session ? "entered" : "left");
+			}
+			int scene = SokuLib::sceneId;
+			bool newSelect = g_inSession && scene != g_lastScene && (scene == SokuLib::SCENE_SELECTSV || scene == SokuLib::SCENE_SELECTCL);
+			g_lastScene = scene;
+			if (newSelect) {
+				// Each character select starts fresh: a lost handshake gets another chance (per
+				// rematch), and the new-palette count starts over.
+				g_newPalettes = 0;
+				if (!g_peerKnown && (g_helloTries > 0 || g_peerIncompatible)) {
+					g_helloTries = 0;
+					g_peerIncompatible = false;
+					log("net: new character select, trying the handshake again");
+				}
 			}
 			if (!g_inSession || g_peerIncompatible)
 				return;
@@ -465,16 +536,16 @@ namespace ps::net {
 
 	void install()
 	{
-		DWORD old;
-		auto slot = reinterpret_cast<RecvFrom *>(IAT_RECVFROM);
-		VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old);
-		orig_recvfrom = *slot;
-		*slot = onRecvFrom;
-		VirtualProtect(slot, sizeof(*slot), old, &old);
+		orig_recvfrom = patch::pointer(IAT_RECVFROM, &onRecvFrom, "network");
+		if (!orig_recvfrom)
+			return;
 
 		g_thread = new std::thread([] {
+			original::palette("reimu", 0);  // index the game's archives now, not on the receive thread
 			while (!g_stop) {
-				tick();
+				guarded("network tick", tick);
+				guarded("network send", flushOutbox);
+				guarded("cache", storeReceived);
 				Sleep(50);
 			}
 		});

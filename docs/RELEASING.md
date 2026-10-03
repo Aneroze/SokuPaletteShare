@@ -4,8 +4,13 @@
 
 ```
 build.bat
+tools\test.bat
 pwsh -File tools\package.ps1
 ```
+
+After a Visual Studio update, check that no Windows 8+ import came back (Windows 7 support):
+`dumpbin /imports build\PaletteShare.dll` must not list GetSystemTimePreciseAsFileTime,
+CreateFile2, CopyFile2 or other newer functions (see src/win7.cpp).
 
 Never put a palette file or a `palettes.ini` in the zip: SokuLauncher updates a mod by copying the
 new zip's files over the old folder, so they would overwrite a player's own (it deletes nothing
@@ -14,8 +19,9 @@ whole folder, which is why the library lives in `<game folder>\PaletteShare\pale
 
 `dist\PaletteShare-<version>.zip` contains `PaletteShare\PaletteShare.dll`, `mod.json`,
 `PaletteShare.ini`, `README.md`, `LICENSE` (MIT) and `THIRD-PARTY-NOTICES.txt` (the MIT notices of
-SokuLib and nlohmann/json, which are compiled into the DLL), the same layout as other SokuLauncher
-mods, plus an empty `PaletteShare\palettes\<character>\` folder for each of the 20 characters.
+SokuLib and nlohmann/json, which are compiled into the DLL) and `WHERE-ARE-MY-PALETTES.txt`, the
+same layout as other SokuLauncher mods. The palette folders are created in the game folder at the
+first start, not shipped.
 
 ## Before 1.0.0 (needs a person, not a script)
 

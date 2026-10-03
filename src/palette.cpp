@@ -1,11 +1,11 @@
 #include "palette.hpp"
+#include "guard.hpp"
+#include "sha256.hpp"
 #include "log.hpp"
 #include <algorithm>
 #include <windows.h>
-#include <bcrypt.h>
 #include <fstream>
 #include <iterator>
-#include <SokuLib.hpp>
 
 namespace ps {
 	std::vector<uint8_t> Palette::serialize() const
@@ -67,11 +67,10 @@ namespace ps {
 	PaletteHash hashPalette(const Palette &palette)
 	{
 		auto data = palette.serialize();
-		uint8_t digest[32] = {};
-		BCryptHash(BCRYPT_SHA256_ALG_HANDLE, nullptr, 0, data.data(), static_cast<ULONG>(data.size()), digest, sizeof(digest));
+		auto digest = sha256(data.data(), data.size());
 
 		PaletteHash h;
-		memcpy(h.bytes.data(), digest, h.bytes.size());
+		memcpy(h.bytes.data(), digest.data(), h.bytes.size());
 		return h;
 	}
 
@@ -121,59 +120,6 @@ namespace ps {
 		return true;
 	}
 
-	bool trueColorSupported()
-	{
-		// DPhoenix's mod ships as PaletteTrueColors.dll; palette-picker looks for true-color-palettes.dll.
-		return GetModuleHandleA("PaletteTrueColors.dll") || GetModuleHandleA("true-color-palettes.dll");
-	}
-
-	Palette readGamePalette(const SokuLib::Palette &game)
-	{
-		Palette p;
-		p.bpp = game.bitsPerPixel;
-		if (game.data && (p.bpp == 16 || p.bpp == 32)) {
-			auto src = static_cast<const uint8_t *>(game.data);
-			p.colors.assign(src, src + Palette::colorBytes(p.bpp));
-		}
-		return p;
-	}
-
-	static std::vector<uint8_t> to16bit(const std::vector<uint8_t> &argb32)
-	{
-		std::vector<uint8_t> out(512);
-		for (int i = 0; i < 256; i++) {
-			uint32_t c;
-			memcpy(&c, &argb32[i * 4], 4);
-			uint16_t a = (c >> 24) >= 0x80 ? 1 : 0;
-			uint16_t v = (a << 15) | (((c >> 19) & 0x1F) << 10) | (((c >> 11) & 0x1F) << 5) | ((c >> 3) & 0x1F);
-			memcpy(&out[i * 2], &v, 2);
-		}
-		return out;
-	}
-
-	void writeGamePalette(const Palette &palette, SokuLib::Palette &game)
-	{
-		if (!palette.valid())
-			return;
-
-		uint8_t bpp = palette.bpp;
-		const std::vector<uint8_t> *colors = &palette.colors;
-		std::vector<uint8_t> reduced;
-		if (bpp == 32 && !trueColorSupported()) {
-			reduced = to16bit(palette.colors);
-			colors = &reduced;
-			bpp = 16;
-		}
-
-		if (game.bitsPerPixel != bpp || !game.data) {
-			if (game.data)
-				SokuLib::DeleteFct(game.data);
-			game.data = SokuLib::NewFct(Palette::colorBytes(bpp));
-			game.bitsPerPixel = bpp;
-		}
-		memcpy(game.data, colors->data(), colors->size());
-	}
-
 	void PaletteCache::setDirectory(const std::filesystem::path &dir)
 	{
 		_dir = dir;
@@ -181,13 +127,17 @@ namespace ps {
 		std::filesystem::create_directories(_dir, ec);
 
 		std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> palettes;
-		for (auto &entry : std::filesystem::directory_iterator(_dir, ec)) {
+		std::vector<std::filesystem::path> unfinished;
+		forEachEntry(_dir, [&](const std::filesystem::directory_entry &entry) {
+			std::error_code e;
 			auto ext = entry.path().extension();
 			if (ext == L".tmp")
-				std::filesystem::remove(entry.path(), ec);  // a write that never finished
+				unfinished.push_back(entry.path());  // a write that never finished
 			else if (ext == L".pal")
-				palettes.emplace_back(entry.last_write_time(ec), entry.path());
-		}
+				palettes.emplace_back(entry.last_write_time(e), entry.path());
+		});
+		for (auto &file : unfinished)
+			std::filesystem::remove(file, ec);
 		if (palettes.size() <= MAX_FILES)
 			return;
 		std::sort(palettes.begin(), palettes.end(), [](auto &a, auto &b) { return a.first > b.first; });
@@ -196,7 +146,7 @@ namespace ps {
 		log("cache: trimmed %d old palette(s)", (int)(palettes.size() - KEEP_FILES));
 	}
 
-	void PaletteCache::remember(const PaletteHash &hash, const Palette &palette)
+	void PaletteCache::keep(const Palette &palette, const PaletteHash &hash)
 	{
 		std::lock_guard lock(_mutex);
 		if (_memory.size() >= MAX_IN_MEMORY)
@@ -206,7 +156,7 @@ namespace ps {
 
 	bool PaletteCache::store(const Palette &palette, const PaletteHash &hash)
 	{
-		remember(hash, palette);
+		keep(palette, hash);
 		auto file = _dir / (hash.hex() + ".pal");
 		std::error_code ec;
 		if (std::filesystem::exists(file, ec))
@@ -238,15 +188,22 @@ namespace ps {
 			if (it != _memory.end())
 				return it->second;
 		}
-		std::ifstream in(_dir / (hash.hex() + ".pal"), std::ios::binary);
+		auto file = _dir / (hash.hex() + ".pal");
+		std::ifstream in(file, std::ios::binary);
 		if (!in)
 			return std::nullopt;
 
 		std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		in.close();
 		auto palette = Palette::deserialize(data.data(), data.size());
-		if (!palette || !(hashPalette(*palette) == hash))
+		if (!palette || !(hashPalette(*palette) == hash)) {
+			// Damaged: remove it, or store() would never replace it (it skips existing files).
+			std::error_code ec;
+			std::filesystem::remove(file, ec);
+			log("cache: %s was damaged, removed", hash.hex().c_str());
 			return std::nullopt;
-		remember(hash, *palette);
+		}
+		keep(*palette, hash);
 		return palette;
 	}
 }

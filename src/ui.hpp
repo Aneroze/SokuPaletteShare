@@ -51,6 +51,7 @@ namespace ps::ui {
 		float _fit = 1, _dx = 0, _dy = 0;
 	};
 
+	// Text for the game's renderer (Shift-JIS).
 	std::string narrow(const std::wstring &w);
 	std::string slotName(int slot);
 	// Whether this game shows a slot differently from the game's original colors (a shady-loader
@@ -67,5 +68,4 @@ namespace ps::ui {
 	// the D button is the A key by default.
 	enum class Button { A, B, C, D };
 	std::string buttonName(const SokuLib::KeymapManager *keys, Button button);
-	const char *internalName(int charId);
 }

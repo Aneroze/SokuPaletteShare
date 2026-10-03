@@ -1,4 +1,7 @@
 #include "hooks.hpp"
+#include "game.hpp"
+#include "guard.hpp"
+#include "patch.hpp"
 #include "log.hpp"
 #include "net.hpp"
 #include "picker.hpp"
@@ -137,9 +140,80 @@ namespace ps {
 			log("  rebuilt %d/%d textures in %llu ms", swapped, (int)side.textures.size(), GetTickCount64() - start);
 		}
 
+		// A late palette's rebuild, spread over a few frames (rebuilding everything at once takes
+		// ~30 ms: a visible hitch at a random moment mid-match). The new textures are made a batch per
+		// frame, then all swapped in at once. Render thread, under g_sidesMutex.
+		struct Rebuild {
+			bool active = false;
+			int side = -1;
+			Palette palette;
+			bool toCustom = false;
+			size_t next = 0;
+			std::vector<int> fresh;  // one per side.textures entry, 0 when it failed
+		};
+		Rebuild g_rebuild;
+		constexpr size_t TEXTURES_PER_FRAME = 96;
+
+		void cancelRebuild()
+		{
+			if (!g_rebuild.active)
+				return;
+			for (int handle : g_rebuild.fresh)
+				if (handle)
+					SokuLib::textureMgr.remove(handle);
+			g_rebuild = Rebuild{};
+		}
+
+		void startRebuild(int index, const Palette &palette, bool toCustom)
+		{
+			cancelRebuild();
+			g_rebuild.active = true;
+			g_rebuild.side = index;
+			g_rebuild.palette = palette;
+			g_rebuild.toCustom = toCustom;
+		}
+
+		void stepRebuild()
+		{
+			if (!g_rebuild.active)
+				return;
+			auto &side = g_sides[g_rebuild.side];
+			auto &current = SokuLib::Palette::currentPalette;
+			auto saved = readGamePalette(current);
+			writeGamePalette(g_rebuild.palette, current);
+			for (size_t n = 0; n < TEXTURES_PER_FRAME && g_rebuild.next < side.textures.size(); n++, g_rebuild.next++) {
+				int fresh = 0;
+				SokuLib::textureMgr.loadTexture(&fresh, side.textures[g_rebuild.next].second.c_str(), nullptr, nullptr);
+				g_rebuild.fresh.push_back(fresh);
+			}
+			if (saved.valid())
+				writeGamePalette(saved, current);
+			if (g_rebuild.next < side.textures.size())
+				return;
+
+			int swapped = 0;
+			for (size_t i = 0; i < g_rebuild.fresh.size(); i++) {
+				int fresh = g_rebuild.fresh[i];
+				if (!fresh)
+					continue;
+				auto a = SokuLib::textureMgr.Get(side.textures[i].first);
+				auto b = SokuLib::textureMgr.Get(fresh);
+				if (a && b && fresh != side.textures[i].first) {
+					std::swap(*a, *b);
+					swapped++;
+				}
+				SokuLib::textureMgr.remove(fresh);  // releases the texture we swapped out
+			}
+			side.showingCustom = g_rebuild.toCustom;
+			log("  side=%d: %d/%d textures swapped in", g_rebuild.side, swapped, (int)side.textures.size());
+			g_rebuild = Rebuild{};
+		}
+
 		void showSide(int index, bool custom)
 		{
 			auto &side = g_sides[index];
+			if (g_rebuild.active && g_rebuild.side == index)
+				cancelRebuild();  // the hotkey wins over a late palette still being prepared
 			if (!side.custom || side.showingCustom == custom)
 				return;
 			rebuildTextures(side, custom ? *side.custom : side.vanilla);
@@ -163,8 +237,25 @@ namespace ps {
 			g_loadingPlayer = nullptr;
 		}
 
+		// What a replay saved after this match keeps for a side: the custom palette chosen here, or
+		// for a side chosen here, what it shows if that isn't the game's own palette for the slot,
+		// whatever made it so (palette-picker, a palette mod, edited data files); the opponent's
+		// custom palette is recorded where it's applied.
+		void recordForReplay(int index, const Side &side, const std::optional<Palette> &picked)
+		{
+			if (watchingReplay())
+				return;
+			std::optional<Palette> shown = picked;
+			if (!shown && pickedHere(index) && side.vanilla.valid()) {
+				auto orig = original::palette(game::characterName(side.charId), side.slot);
+				if (orig && !sameColors(*orig, side.vanilla))
+					shown = side.vanilla;
+			}
+			replay::record(index, side.charId, side.slot, shown, true);
+		}
+
 		// The character's palette is in currentPalette (vanilla load or palette-picker).
-		void __cdecl onPaletteReady()
+		void paletteReady()
 		{
 			auto player = g_loadingPlayer;
 			if (!player)
@@ -177,7 +268,11 @@ namespace ps {
 			std::lock_guard lock(g_sidesMutex);
 			auto &palette = SokuLib::Palette::currentPalette;
 			auto &side = g_sides[index];
+			if (g_rebuild.active && g_rebuild.side == index)
+				cancelRebuild();
 			side = Side{};
+			if (!game::normalCharacter(player->characterIndex) || player->paletteId < 0 || player->paletteId > 7)
+				return;  // Soku2 and other added characters aren't supported
 			side.charId = player->characterIndex;
 			side.slot = player->paletteId;
 			std::optional<Palette> picked;  // the custom palette chosen here, recorded for replays
@@ -193,23 +288,10 @@ namespace ps {
 				}
 			}
 			side.vanilla = readGamePalette(palette);
+			recordForReplay(index, side, picked);
 			if (!side.vanilla.valid()) {
 				log("load side=%d char=%d slot=%d: palette unreadable (bpp=%d)", index, side.charId, side.slot, (int)palette.bitsPerPixel);
-				if (!watchingReplay())
-					replay::record(index, side.charId, side.slot, picked);
 				return;
-			}
-			if (!watchingReplay()) {
-				// For replays: a side chosen here keeps what it shows if that isn't the game's own
-				// palette for the slot, whatever made it so (our picker, palette-picker, a palette
-				// mod, edited data files).
-				std::optional<Palette> shown = picked;
-				if (!shown && pickedHere(index)) {
-					auto orig = original::palette(ui::internalName(side.charId), side.slot);
-					if (orig && !sameColors(*orig, side.vanilla))
-						shown = side.vanilla;
-				}
-				replay::record(index, side.charId, side.slot, shown);
 			}
 
 			auto hash = hashPalette(side.vanilla);
@@ -237,24 +319,39 @@ namespace ps {
 			}
 		}
 
+		void __cdecl onPaletteReady()
+		{
+			guarded("load hook", paletteReady);
+		}
+
 		int *__fastcall onLoadTexture(void *mgr, void *edx, int *ret, LPCSTR path, void *w, void *h)
 		{
 			auto result = orig_loadTexture(mgr, edx, ret, path, w, h);
 			if (g_loadingPlayer && ret && *ret && path) {
 				int index = g_loadingPlayer->teamId;
 				if (index >= 0 && index <= 1) {
-					std::lock_guard lock(g_sidesMutex);
-					g_sides[index].textures.emplace_back(*ret, path);
+					guarded("texture hook", [&] {
+						std::lock_guard lock(g_sidesMutex);
+						if (g_sides[index].charId >= 0)
+							g_sides[index].textures.emplace_back(*ret, path);
+					});
 				}
 			}
 			return result;
 		}
 
+		void preview(int charId, int playerId, int slot);
+
 		// Character select: currentPalette holds the palette of the preview about to be built.
 		void __cdecl onPreview(int charId, int playerId, int slot)
 		{
-			if (playerId < 0 || playerId > 1)
-				return;
+			if (playerId < 0 || playerId > 1 || slot < 0 || slot > 7 || !game::normalCharacter(charId))
+				return;  // also: Soku2 and other added characters aren't supported
+			guarded("preview hook", [&] { preview(charId, playerId, slot); });
+		}
+
+		void preview(int charId, int playerId, int slot)
+		{
 			int local = net::localSide();
 			auto &palette = SokuLib::Palette::currentPalette;
 
@@ -303,12 +400,10 @@ namespace ps {
 				return;
 			log("opponent palette for side=%d changed after loading: %s", index, custom ? hashPalette(*custom).hex().c_str() : "none");
 			replay::record(index, side.charId, side.slot, custom);
-			if (side.showingCustom)
-				rebuildTextures(side, custom ? *custom : side.vanilla);
-			else if (custom && g_showOpponent)
-				rebuildTextures(side, *custom);
+			bool show = custom && g_showOpponent;
+			if (show || side.showingCustom)
+				startRebuild(index, show ? *custom : side.vanilla, show);
 			side.custom = std::move(custom);
-			side.showingCustom = side.custom && g_showOpponent;
 		}
 
 		template<int N>
@@ -317,22 +412,28 @@ namespace ps {
 
 			static int __fastcall hook(void *self)
 			{
-				if (pollOpponentToggle()) {
+				guarded("battle hook", [] {
+					logEnvironmentOnce();
+					if (pollOpponentToggle()) {
+						std::lock_guard lock(g_sidesMutex);
+						for (int i = 0; i < 2; i++)
+							showSide(i, g_showOpponent);
+					}
+					pickUpLatePalettes();
 					std::lock_guard lock(g_sidesMutex);
-					for (int i = 0; i < 2; i++)
-						showSide(i, g_showOpponent);
-				}
-				pickUpLatePalettes();
-				return orig(self);
+					stepRebuild();
+				});
+				int ret = orig(self);
+				guarded("battle drawing", drawToggleNotice);
+				return ret;
 			}
 		};
 
 		template<int N>
 		void hookRender(void *vtable)
 		{
-			auto slot = reinterpret_cast<DWORD *>(vtable) + 2;  // destructor, onProcess, onRender
-			RenderHook<N>::orig = reinterpret_cast<int (__fastcall *)(void *)>(*slot);
-			*slot = reinterpret_cast<DWORD>(&RenderHook<N>::hook);
+			auto slot = reinterpret_cast<DWORD>(vtable) + 8;  // destructor, onProcess, onRender
+			RenderHook<N>::orig = patch::pointer(slot, &RenderHook<N>::hook, "battle drawing");
 		}
 
 		// 0x467B82: xor ebx,ebx / cmp word ptr [esp+28h],bx (7 bytes) -> call stub / nop / nop
@@ -366,13 +467,16 @@ namespace ps {
 			}
 		}
 
-		void writeCall(DWORD at, void *target, int nops)
-		{
-			*reinterpret_cast<BYTE *>(at) = 0xE8;
-			*reinterpret_cast<DWORD *>(at + 1) = reinterpret_cast<DWORD>(target) - (at + 5);
-			for (int i = 0; i < nops; i++)
-				*reinterpret_cast<BYTE *>(at + 5 + i) = 0x90;
-		}
+		DWORD g_noticeUntil = 0;  // Ctrl+P feedback on screen until then
+	}
+
+	void drawToggleNotice()
+	{
+		if (static_cast<int>(g_noticeUntil - GetTickCount()) <= 0)
+			return;
+		static ui::Text &text = *new ui::Text(14);  // never destroyed (see picker.cpp)
+		ui::drawBox(232, 92, 176, 22, 0xC0000000, 0xC0B0B0B0);
+		text.draw(g_showOpponent ? "Opponent palettes: ON" : "Opponent palettes: OFF", 244, 95);
 	}
 
 	bool pollOpponentToggle()
@@ -386,8 +490,9 @@ namespace ps {
 		if (!pressed)
 			return false;
 		g_showOpponent = !g_showOpponent;
+		g_noticeUntil = GetTickCount() + 2000;
 		log("hotkey: opponent custom palettes %s", g_showOpponent ? "ON" : "OFF");
-		SokuLib::playSEWaveBuffer(g_showOpponent ? 0x28 : 0x29);
+		SokuLib::playSEWaveBuffer(g_showOpponent ? game::SE_OK : game::SE_BACK);
 		return true;
 	}
 
@@ -395,21 +500,19 @@ namespace ps {
 	{
 		g_showOpponent = config.showOpponentPalettes;
 
-		DWORD old;
-		VirtualProtect(reinterpret_cast<LPVOID>(TEXT_SECTION_OFFSET), TEXT_SECTION_SIZE, PAGE_EXECUTE_WRITECOPY, &old);
-		orig_loadCharacter = SokuLib::TamperNearCall(0x46DE31, onLoadCharacter);
-		orig_loadTexture = SokuLib::TamperNearCall(0x467C43, onLoadTexture);
-		orig_getCharName = SokuLib::union_cast<DWORD>(SokuLib::TamperNearCall(0x41FFBD, previewStub));
-		writeCall(0x467B82, paletteReadyStub, 2);
-		VirtualProtect(reinterpret_cast<LPVOID>(TEXT_SECTION_OFFSET), TEXT_SECTION_SIZE, old, &old);
-
-		VirtualProtect(reinterpret_cast<LPVOID>(RDATA_SECTION_OFFSET), RDATA_SECTION_SIZE, PAGE_READWRITE, &old);
+		// The load hooks belong together: without the first, the others see no loading player.
+		orig_loadCharacter = patch::call(0x46DE31, onLoadCharacter, "character load");
+		if (orig_loadCharacter) {
+			orig_loadTexture = patch::call(0x467C43, onLoadTexture, "character textures");
+			// 0x467B82: xor ebx,ebx (33 DB) / cmp word ptr [esp+28h],bx -> call stub, nop, nop
+			static const uint8_t paletteReadyCode[] = {0x33, 0xDB, 0x66, 0x39, 0x5C, 0x24, 0x28};
+			patch::callOver(0x467B82, paletteReadyCode, sizeof(paletteReadyCode), reinterpret_cast<const void *>(&paletteReadyStub), "character palette");
+		}
+		orig_getCharName = patch::call(0x41FFBD, reinterpret_cast<const void *>(&previewStub), "select preview");
 		hookRender<0>(&SokuLib::VTable_Battle);
 		hookRender<1>(&SokuLib::VTable_BattleServer);
 		hookRender<2>(&SokuLib::VTable_BattleClient);
 		hookRender<3>(&SokuLib::VTable_BattleWatch);
-		VirtualProtect(reinterpret_cast<LPVOID>(RDATA_SECTION_OFFSET), RDATA_SECTION_SIZE, old, &old);
-		FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
 
 		log("hooks installed (loadCharacter=%p loadTexture=%p getCharName=%08X)", orig_loadCharacter, orig_loadTexture, orig_getCharName);
 	}

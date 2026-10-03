@@ -1,4 +1,7 @@
 #include "menu.hpp"
+#include "game.hpp"
+#include "guard.hpp"
+#include "patch.hpp"
 #include "library.hpp"
 #include "log.hpp"
 #include "ui.hpp"
@@ -33,14 +36,7 @@ namespace ps::menu {
 			return ui::buttonName(reinterpret_cast<const SokuLib::KeymapManager *>(LOCAL_KEYS), button);
 		}
 
-		int menuMove(int axis)
-		{
-			if (axis == 1 || (axis > 24 && axis % 6 == 0))
-				return 1;
-			if (axis == -1 || (axis < -24 && -axis % 6 == 0))
-				return -1;
-			return 0;
-		}
+		int menuMove(int axis) { return game::menuMove(axis); }
 
 		class PaletteMenu : public SokuLib::IMenu {
 		public:
@@ -49,6 +45,21 @@ namespace ps::menu {
 			void _() override {}
 
 			int onProcess() override
+			{
+				int keepOpen = 0;
+				if (!guarded("palette menu", [&] { keepOpen = process(); }))
+					return close();
+				return keepOpen;
+			}
+
+			int onRender() override
+			{
+				guarded("palette menu drawing", [&] { render(); });
+				return true;
+			}
+
+		private:
+			int process()
 			{
 				auto &in = menuKeys();
 				int rows = rowCount();
@@ -87,7 +98,7 @@ namespace ps::menu {
 				return true;
 			}
 
-			int onRender() override
+			void render()
 			{
 				// Dim the deck screen, then the panel.
 				ui::drawBox(0, 0, 640, 480, 0xA0000000, 0);
@@ -141,7 +152,6 @@ namespace ps::menu {
 
 				_text.draw("Up/Down select   Left/Right fallback   " + key(ui::Button::C) + " use default   " +
 					key(ui::Button::B) + " back", x + 16, y + h - 26);
-				return true;
 			}
 
 		private:
@@ -198,26 +208,19 @@ namespace ps::menu {
 			ui::PalettePreview _fallback;
 		};
 
-		// palette-picker uses the same key there. Checked on first use, once every mod is loaded.
-		bool disabled()
-		{
-			static int state = -1;
-			if (state < 0) {
-				state = GetModuleHandleA("palette-picker.dll") ? 1 : 0;
-				if (state)
-					log("menu: palette-picker is loaded (it uses the same key there), palette menu off");
-			}
-			return state == 1;
-		}
-
 		int __fastcall onDeckMenuProcess(void *self)
 		{
 			int charId = *reinterpret_cast<int *>(reinterpret_cast<char *>(self) + DECK_MENU_CHARACTER);
-			if (!disabled() && menuKeys().c == 1 && charId >= 0) {
-				SokuLib::playSEWaveBuffer(SE_OK);
-				log("menu: palette menu for char=%d", charId);
-				SokuLib::activateMenu(new PaletteMenu(charId));
-				return true;
+			// palette-picker uses the same key there; Soku2 and other added characters aren't supported.
+			if (!game::palettePickerLoaded() && menuKeys().c == 1 && game::normalCharacter(charId)) {
+				bool opened = guarded("menu", [&] {
+					SokuLib::activateMenu(new PaletteMenu(charId));
+					log("menu: palette menu for char=%d", charId);
+				});
+				if (opened) {
+					SokuLib::playSEWaveBuffer(SE_OK);
+					return true;
+				}
 			}
 			return orig_deckMenuProcess(self);
 		}
@@ -225,12 +228,8 @@ namespace ps::menu {
 
 	void install()
 	{
-		DWORD old;
-		auto slot = reinterpret_cast<DWORD *>(DECK_MENU_PROCESS_SLOT);
-		VirtualProtect(slot, 4, PAGE_READWRITE, &old);
-		orig_deckMenuProcess = reinterpret_cast<int (__fastcall *)(void *)>(*slot);
-		*slot = reinterpret_cast<DWORD>(&onDeckMenuProcess);
-		VirtualProtect(slot, 4, old, &old);
-		log("menu: installed on the deck construction menu");
+		orig_deckMenuProcess = patch::pointer(DECK_MENU_PROCESS_SLOT, &onDeckMenuProcess, "palette menu");
+		if (orig_deckMenuProcess)
+			log("menu: installed on the deck construction menu");
 	}
 }

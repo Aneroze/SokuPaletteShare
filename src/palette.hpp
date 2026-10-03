@@ -60,7 +60,10 @@ namespace ps {
 	public:
 		// Also trims the folder: leftover temp files, and the oldest palettes past MAX_FILES.
 		void setDirectory(const std::filesystem::path &dir);
+		// In memory and on disk.
 		bool store(const Palette &palette, const PaletteHash &hash);
+		// In memory only (the disk write can come later, from another thread).
+		void keep(const Palette &palette, const PaletteHash &hash);
 		std::optional<Palette> load(const PaletteHash &hash);
 
 	private:
@@ -68,6 +71,5 @@ namespace ps {
 		std::filesystem::path _dir;
 		std::mutex _mutex;
 		std::map<std::array<uint8_t, 16>, Palette> _memory;
-		void remember(const PaletteHash &hash, const Palette &palette);
 	};
 }

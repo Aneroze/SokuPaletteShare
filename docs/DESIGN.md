@@ -189,3 +189,21 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
 - The toggle temporarily writes the global palette on the render thread; the loader thread also
   uses it. Toggles only happen in battle scenes, when the loader is idle.
 - Per-node spectator limit and when the host redirects (for M3).
+
+## Robustness
+
+- **Patching** (src/patch.cpp): every patch checks what it replaces. A call site must hold a near
+  call (another mod's call there is chained through), a replaced instruction run must match
+  byte for byte, a function entry must start with the SEH prologue or another mod's jump (chained),
+  and a vtable or import slot must point at code. Otherwise only that feature stays off, logged.
+- **Exceptions**: every entry point the game calls (hooks, render hooks, the network thread) runs
+  through `guarded` (src/guard.hpp); the game has no handler for C++ exceptions.
+- **Threads**: the loader thread (character loads), the game thread (select, battle, menus), the
+  game's receive thread (our recvfrom hook) and our network thread. The receive thread only parses
+  and queues: sends go through an outbox and cache writes through a queue, both handled outside
+  the network lock.
+- **Windows 7**: hashing is built in (src/sha256.cpp); win7.asm/win7.cpp replace the three Windows
+  8 imports the C++ library brings (GetSystemTimePreciseAsFileTime, CreateFile2, CopyFile2) with
+  stand-ins that fall back to older functions. Check with `dumpbin /imports` after toolset updates.
+- **Tests** (tests/tests.cpp, `tools\test.bat`): the game-free parts (sha256, base64, palette,
+  palettefile, protocol, metaformat) plus a seeded fuzz pass over every parser.

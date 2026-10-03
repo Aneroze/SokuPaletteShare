@@ -21,5 +21,8 @@ if not exist "%ROOT%thirdparty\SokuLib\CMakeLists.txt" (
   exit /b 1
 )
 cmake -S "%ROOT%." -B "%ROOT%build" -G Ninja -DCMAKE_BUILD_TYPE=Release || exit /b 1
-cmake --build "%ROOT%build" --target PaletteShare || exit /b 1
-echo built: %ROOT%build\PaletteShare.dll
+REM Optional argument: another target (e.g. PaletteShareTests).
+set TARGET=%~1
+if "%TARGET%"=="" set TARGET=PaletteShare
+cmake --build "%ROOT%build" --target %TARGET% || exit /b 1
+if "%TARGET%"=="PaletteShare" echo built: %ROOT%build\PaletteShare.dll

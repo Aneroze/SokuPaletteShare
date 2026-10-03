@@ -33,4 +33,6 @@ namespace ps {
 	// The opponent-palette hotkey (Ctrl+P): flips the setting when pressed this frame and says so.
 	// Game thread, once per frame (battle and character select call it).
 	bool pollOpponentToggle();
+	// Draws "Opponent palettes: ON/OFF" for 2 s after the hotkey (render thread, after the scene).
+	void drawToggleNotice();
 }

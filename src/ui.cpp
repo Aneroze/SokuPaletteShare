@@ -1,4 +1,5 @@
 #include "ui.hpp"
+#include "game.hpp"
 #include "original.hpp"
 #include "log.hpp"
 #include <windows.h>
@@ -45,7 +46,7 @@ namespace ps::ui {
 		auto it = cache.find({charId, slot});
 		if (it != cache.end() && now - it->second.at < RELOAD_MS)
 			return it->second.palette;
-		const char *name = internalName(charId);
+		const char *name = game::characterName(charId);
 		std::optional<Palette> result;
 		if (name && *name && slot >= 0 && slot < 8) {
 			auto &current = SokuLib::Palette::currentPalette;
@@ -63,7 +64,7 @@ namespace ps::ui {
 	std::optional<Palette> moddedSlot(int charId, int slot)
 	{
 		static std::map<std::pair<int, int>, bool> logged;
-		const char *name = internalName(charId);
+		const char *name = game::characterName(charId);
 		auto orig = original::palette(name, slot);
 		auto loaded = gameSlot(charId, slot);
 		std::optional<Palette> modded;
@@ -163,7 +164,7 @@ namespace ps::ui {
 	{
 		// The original colors when the archives can be read: this game may replace the slot
 		// (shady-loader, data files), and players without palette mods don't see that.
-		if (auto orig = original::palette(internalName(charId), slot))
+		if (auto orig = original::palette(game::characterName(charId), slot))
 			show(charId, "original" + std::to_string(slot), &*orig, -1, x, y, maxHeight);
 		else
 			show(charId, "slot" + std::to_string(slot), nullptr, slot, x, y, maxHeight);
@@ -181,7 +182,7 @@ namespace ps::ui {
 
 		if (charId != _charId || key != _key) {
 			clear();
-			const char *name = internalName(charId);
+			const char *name = game::characterName(charId);
 			if (!name || !*name)
 				return;
 
@@ -266,9 +267,14 @@ namespace ps::ui {
 
 	std::string narrow(const std::wstring &w)
 	{
-		int n = WideCharToMultiByte(CP_ACP, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
-		std::string s(n > 0 ? n - 1 : 0, '\0');
-		WideCharToMultiByte(CP_ACP, 0, w.c_str(), -1, s.data(), n, nullptr, nullptr);
+		// The game draws text as Shift-JIS (code page 932) whatever the system's code page: so
+		// Japanese file names show up right, and characters it can't show become '?'.
+		constexpr UINT SHIFT_JIS = 932;
+		int n = WideCharToMultiByte(SHIFT_JIS, 0, w.c_str(), -1, nullptr, 0, "?", nullptr);
+		if (n <= 0)
+			return std::string(w.begin(), w.end());  // no such code page (unlikely): ASCII as is
+		std::string s(n - 1, '\0');
+		WideCharToMultiByte(SHIFT_JIS, 0, w.c_str(), -1, s.data(), n, "?", nullptr);
 		return s;
 	}
 
@@ -300,8 +306,4 @@ namespace ps::ui {
 		return std::string(name, n);
 	}
 
-	const char *internalName(int charId)
-	{
-		return reinterpret_cast<const char *(*)(int)>(0x43F3F0)(charId);
-	}
 }

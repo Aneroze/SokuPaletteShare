@@ -2,6 +2,22 @@
 
 ## 1.0.0 (not released yet: needs the two-PC test, see docs/RELEASING.md)
 
+- Second review: built-in SHA-256 (Windows 7 support; the DLL no longer imports Windows 8-only
+  functions); every hook guarded against exceptions; patches check what they replace (another mod's
+  unexpected change turns just that feature off, logged); the select screen object is checked
+  before use; Soku2 and other added characters are left alone; network sends and cache writes
+  happen outside the network lock (cache writes on our own thread).
+- Netplay: the per-select limit counts only real custom palettes (up to 256), the handshake retries
+  at each character select, and a stranger can't pass as the opponent once a match has started.
+- A palette arriving late is applied over a few frames instead of in one ~30 ms hitch.
+- Ctrl+P shows "Opponent palettes: ON/OFF" for 2 seconds.
+- Logging is on by default (2 MB per run) and starts with a line about Windows/Wine and the mods
+  that matter; palette names show as Shift-JIS in game (Japanese names display correctly).
+- Palette files are capped at 64 KB (.pal/.act) and 4 MB (.bmp); a damaged cache file is replaced.
+- Replays: a busy save is logged instead of skipped silently, rep mode also cleans a stale sidecar,
+  and a new match starts with fresh entries.
+- The release zip has WHERE-ARE-MY-PALETTES.txt instead of empty palette folders; author Aneroze;
+  packaging refuses mismatched versions or a stale DLL. Tests: tools\test.bat.
 - Own palette picker (first version): palettes from `palettes/<character>/`, scrolled with Up/Down in
   the palette step. Each palette has an explicit fallback slot (palettes.ini, per-character default
   0) that the picker shows and steers the game to, so players without PaletteShare see exactly that

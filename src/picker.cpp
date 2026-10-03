@@ -1,4 +1,7 @@
 #include "picker.hpp"
+#include "game.hpp"
+#include "guard.hpp"
+#include "patch.hpp"
 #include "hooks.hpp"
 #include "library.hpp"
 #include "log.hpp"
@@ -15,7 +18,6 @@
 
 namespace ps::picker {
 	namespace {
-		constexpr DWORD MENU_KEYS = 0x8986A8;       // the keyboard's menu KeymapManager
 		constexpr DWORD P1_DEVICE = 0x898678;       // player 1's device: -1 keyboard, 0.. a gamepad
 		constexpr DWORD GAMEPAD_KEYS = 0x899CEC;    // vector of the gamepads' KeymapManagers
 		constexpr int GAMEPAD_KEYS_SIZE = 0x68;     //   (stride, see 0x43E3B0)
@@ -111,30 +113,11 @@ namespace ps::picker {
 
 		std::mutex g_mutex;  // customFor() is called from the loader thread
 		Pick g_picks[2];
-		// palette-picker owns the palette step when it's loaded. Checked on first use, once every
-		// mod is loaded (it may load after us).
-		bool disabled()
-		{
-			static int state = -1;
-			if (state < 0) {
-				state = GetModuleHandleA("palette-picker.dll") ? 1 : 0;
-				if (state)
-					log("picker: palette-picker is loaded, so PaletteShare's picker is off");
-			}
-			return state == 1;
-		}
+		bool disabled() { return game::palettePickerLoaded(); }
 
 		void (__fastcall *orig_setInputs)(void *mgr, void *edx) = nullptr;
 
-		SokuLib::Select *selectScene()
-		{
-			switch (SokuLib::sceneId) {
-			case SokuLib::SCENE_SELECT: case SokuLib::SCENE_SELECTSV: case SokuLib::SCENE_SELECTCL:
-				return *reinterpret_cast<SokuLib::Select **>(0x8A000C);
-			default:
-				return nullptr;
-			}
-		}
+		SokuLib::Select *selectScene() { return game::selectScene(); }
 
 		bool online() { return SokuLib::sceneId != SokuLib::SCENE_SELECT; }
 
@@ -157,7 +140,7 @@ namespace ps::picker {
 		// before netplay sends them; looked up like 0x43EA4B does, but bounds-checked.
 		SokuLib::KeymapManager *localDeviceKeys()
 		{
-			auto keyboard = reinterpret_cast<SokuLib::KeymapManager *>(MENU_KEYS);
+			auto keyboard = reinterpret_cast<SokuLib::KeymapManager *>(game::MENU_KEYS);
 			int device = *reinterpret_cast<signed char *>(P1_DEVICE);
 			if (device < 0)
 				return keyboard;
@@ -193,7 +176,7 @@ namespace ps::picker {
 			if (input.pos < 0 || static_cast<size_t>(input.pos) >= list.size())
 				return -1;
 			int id = list[input.pos];
-			return id == SokuLib::CHARACTER_RANDOM || id == SokuLib::CHARACTER_NAMAZU ? -1 : id;
+			return game::normalCharacter(id) ? id : -1;
 		}
 
 		// The pick's snapshot of the character's palettes: library files, replaced slots, slot colors.
@@ -287,15 +270,7 @@ namespace ps::picker {
 			}
 		}
 
-		int menuMove(int axis)
-		{
-			// The game's usual feel: one step on press, then repeat while held.
-			if (axis == 1 || (axis > 24 && axis % 6 == 0))
-				return 1;
-			if (axis == -1 || (axis < -24 && -axis % 6 == 0))
-				return -1;
-			return 0;
-		}
+		int menuMove(int axis) { return game::menuMove(axis); }
 
 		// Edit mode: Up/Down choose the slot, D or A save, B cancels. Nothing reaches the game.
 		void driveEdit(Pick &pick, SokuLib::KeyInput &in)
@@ -501,7 +476,8 @@ namespace ps::picker {
 				return;
 			auto &o = g_overrides[mgr];
 			o.real = in;
-			drive(static_cast<SokuLib::KeymapManager *>(mgr));
+			if (!guarded("picker", [&] { drive(static_cast<SokuLib::KeymapManager *>(mgr)); }))
+				in = o.real;  // whatever happened, the game gets the player's own keys
 			o.written = in;
 			o.active = memcmp(&o.real, &o.written, sizeof(in)) != 0;
 		}
@@ -536,7 +512,7 @@ namespace ps::picker {
 		// What the pick's player presses for a game button.
 		std::string key(const Pick &pick, ui::Button button)
 		{
-			return ui::buttonName(pick.keys ? pick.keys : reinterpret_cast<const SokuLib::KeymapManager *>(MENU_KEYS), button);
+			return ui::buttonName(pick.keys ? pick.keys : reinterpret_cast<const SokuLib::KeymapManager *>(game::MENU_KEYS), button);
 		}
 
 		void drawPick(const Pick &pick, int player)
@@ -630,13 +606,15 @@ namespace ps::picker {
 		// (a custom palette on the slot they're already on). So rebuild it when a new one arrives;
 		// the preview hook then shows it. Game thread, without g_mutex (the rebuild calls back in).
 		unsigned g_seenGeneration = 0;
+		bool g_refreshOpponent = false;  // set by Ctrl+P: rebuild with or without their palette
 
 		void refreshOpponentPreview(SokuLib::Select *sel)
 		{
 			unsigned generation = net::remoteGeneration();
-			if (generation == g_seenGeneration)
+			if (generation == g_seenGeneration && !g_refreshOpponent)
 				return;
 			g_seenGeneration = generation;
+			g_refreshOpponent = false;
 			int local = net::localSide();
 			if (!online() || local < 0)
 				return;
@@ -648,6 +626,41 @@ namespace ps::picker {
 			rebuildPreview(sel, side, charId);
 		}
 
+		void beforeRender(SokuLib::Select *sel)
+		{
+			logEnvironmentOnce();
+			// Ctrl+P works here too: the opponent's preview follows it.
+			if (pollOpponentToggle())
+				g_refreshOpponent = true;
+			refreshOpponentPreview(sel);
+			if (disabled())
+				return;
+			for (int side = 0; side < 2; side++) {
+				std::unique_lock lock(g_mutex);
+				auto &pick = g_picks[side];
+				if (pick.active && pick.previewDirty) {
+					lock.unlock();  // the rebuild calls back into our preview hook
+					refreshPreview(sel, side, pick);
+				}
+			}
+		}
+
+		void afterRender(SokuLib::Select *sel)
+		{
+			drawToggleNotice();
+			if (disabled())
+				return;
+			std::lock_guard lock(g_mutex);
+			for (int side = 0; side < 2; side++) {
+				if (g_picks[side].active && keysOf(sel, side) && !submenuOpen())
+					drawPick(g_picks[side], side);
+				else {
+					g_customPreview[side].clear();
+					g_fallbackPreview[side].clear();
+				}
+			}
+		}
+
 		template<int N>
 		struct RenderHook {
 			static inline int (__fastcall *orig)(void *self) = nullptr;
@@ -655,32 +668,9 @@ namespace ps::picker {
 			static int __fastcall hook(void *self)
 			{
 				auto sel = static_cast<SokuLib::Select *>(self);
-				// Ctrl+P works here too: the opponent's preview follows it.
-				if (pollOpponentToggle())
-					g_seenGeneration--;  // rebuild their preview with or without their palette
-				refreshOpponentPreview(sel);
-				if (!disabled()) {
-					for (int side = 0; side < 2; side++) {
-						std::unique_lock lock(g_mutex);
-						auto &pick = g_picks[side];
-						if (pick.active && pick.previewDirty) {
-							lock.unlock();  // the rebuild calls back into our preview hook
-							refreshPreview(sel, side, pick);
-						}
-					}
-				}
+				guarded("picker: before drawing", [&] { beforeRender(sel); });
 				int ret = orig(self);
-				if (!disabled()) {
-					std::lock_guard lock(g_mutex);
-					for (int side = 0; side < 2; side++) {
-						if (g_picks[side].active && keysOf(sel, side) && !submenuOpen())
-							drawPick(g_picks[side], side);
-						else {
-							g_customPreview[side].clear();
-							g_fallbackPreview[side].clear();
-						}
-					}
-				}
+				guarded("picker: drawing", [&] { afterRender(sel); });
 				return ret;
 			}
 		};
@@ -688,9 +678,8 @@ namespace ps::picker {
 		template<int N>
 		void hookRender(void *vtable)
 		{
-			auto slot = reinterpret_cast<DWORD *>(vtable) + 2;  // destructor, onProcess, onRender
-			RenderHook<N>::orig = reinterpret_cast<int (__fastcall *)(void *)>(*slot);
-			*slot = reinterpret_cast<DWORD>(&RenderHook<N>::hook);
+			auto slot = reinterpret_cast<DWORD>(vtable) + 8;  // destructor, onProcess, onRender
+			RenderHook<N>::orig = patch::pointer(slot, &RenderHook<N>::hook, "picker: select screen drawing");
 		}
 	}
 
@@ -734,17 +723,10 @@ namespace ps::picker {
 
 	void install()
 	{
-		DWORD old;
-		VirtualProtect(reinterpret_cast<LPVOID>(TEXT_SECTION_OFFSET), TEXT_SECTION_SIZE, PAGE_EXECUTE_WRITECOPY, &old);
-		orig_setInputs = SokuLib::TamperNearCall(SETINPUTS_CALL, onSetInputs);
-		VirtualProtect(reinterpret_cast<LPVOID>(TEXT_SECTION_OFFSET), TEXT_SECTION_SIZE, old, &old);
-
-		VirtualProtect(reinterpret_cast<LPVOID>(RDATA_SECTION_OFFSET), RDATA_SECTION_SIZE, PAGE_READWRITE, &old);
+		orig_setInputs = patch::call(SETINPUTS_CALL, onSetInputs, "picker: input");
 		hookRender<0>(&SokuLib::VTable_Select);
 		hookRender<1>(&SokuLib::VTable_SelectServer);
 		hookRender<2>(&SokuLib::VTable_SelectClient);
-		VirtualProtect(reinterpret_cast<LPVOID>(RDATA_SECTION_OFFSET), RDATA_SECTION_SIZE, old, &old);
-		FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
 		log("picker: installed (SetInputs orig=%p)", orig_setInputs);
 	}
 }

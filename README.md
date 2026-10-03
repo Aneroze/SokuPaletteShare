@@ -94,15 +94,17 @@ The picker remembers your last choice per character.
 ## Controls and settings (`PaletteShare.ini`)
 
 - **Ctrl+P** toggles your opponent's custom palette on and off at any time: at character select
-  (their preview) and mid-match. Use it if an opponent's palette is hard to look at. Your choice
-  stays until you toggle again or restart the game. The key is configurable under `[Hotkey]`.
+  (their preview) and mid-match. A short "Opponent palettes: ON/OFF" notice confirms it. Use it if an
+  opponent's palette is hard to look at. Your choice stays until you toggle again or restart the
+  game. The key is configurable under `[Hotkey]`.
 - `[Display] ShowOpponentPalettes=0` starts with opponents' custom palettes hidden.
 - `[Replay] Storage=rep` keeps replay palettes inside the `.rep` instead of a `.meta.json` file next
   to it (see Replays).
 - `[Picker] ShowOriginalPalettes=1` lists the original colors of slots a palette mod replaces
   ("Original 03"), so you can still pick them.
-- `[Debug] Log=1` writes `PaletteShare.log` next to the DLL; the previous run's log is kept as
-  `PaletteShare.prev.log`. Send both when reporting a problem.
+- `[Debug] Log=1` (the default) writes `PaletteShare.log` next to the DLL, at most 2 MB per run; the
+  previous run's log is kept as `PaletteShare.prev.log`. Send both when reporting a problem. They
+  include your opponents' IP addresses and ports; `Log=0` turns logging off.
 
 ### Debug settings (for testing, not for normal play)
 
@@ -122,6 +124,11 @@ These aren't in the default `PaletteShare.ini`; add them under `[Debug]` when te
 - Packets are size-checked, and every palette is verified against its SHA-256-based hash before
   use.
 - Players without PaletteShare ignore its packets (the game drops packet types it doesn't know).
+- Only your actual opponent's PaletteShare is talked to, and a peer can send at most 256 new
+  palettes per character select.
+- Before patching the game, PaletteShare checks what it replaces; if another mod changed that spot
+  in an unexpected way, the matching feature stays off (the log says which) instead of breaking the
+  other mod.
 
 ## Replays
 
@@ -145,14 +152,17 @@ Watching always looks in both places. The `.meta.json` file is plain JSON with o
 - **Spectators** see the normal palettes (planned for 1.1).
 - **palette-picker**: when it's loaded, PaletteShare's own picker and palette menu turn off and
   palette-picker chooses your palette; PaletteShare still shares it.
-- **Soku2 and other added characters** aren't supported: only the 20 normal characters.
+- **Soku2 and other added characters** aren't supported or tested: PaletteShare leaves them alone
+  (only the 20 normal characters get the picker, the palette menu and palette sharing).
 - The opponent's custom palette appears in the character-select preview once it has arrived
   (usually a fraction of a second after they scroll to it).
 
 ## Install
 
 Copy the `PaletteShare` folder from the zip into `modules\` in your game folder and enable the mod
-in the mod loader (SokuLauncher or SWRSToys). Received palettes are kept in
+in the mod loader (SokuLauncher or SWRSToys). Runs on Windows 7 and later, and under Wine/Proton.
+The first start creates `PaletteShare\palettes\<character>\` in the game folder for your palettes
+(`WHERE-ARE-MY-PALETTES.txt` in the mod folder says the same). Received palettes are kept in
 `modules\PaletteShare\cache\` (about 0.5 KB each; the oldest are removed past 2000).
 
 ## Build
@@ -163,4 +173,6 @@ build.bat
 ```
 
 Needs Visual Studio (x86 C++ tools), CMake 3.20+ and Ninja. Output: `build\PaletteShare.dll`.
+`tools\test.bat` builds and runs the tests (hashing, protocol, palette files, replay metadata,
+plus a fuzz pass over every parser).
 SokuLib is a submodule on its `dev` branch. See [docs/DESIGN.md](docs/DESIGN.md) for how it works.

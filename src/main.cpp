@@ -9,6 +9,8 @@
 #include "net.hpp"
 #include "picker.hpp"
 #include "replaymeta.hpp"
+#include "protocol.hpp"
+#include "sha256.hpp"
 
 // th123.exe 1.10a
 static const BYTE TARGET_HASH[16] = {0xdf, 0x35, 0xd1, 0xfb, 0xc7, 0xb5, 0x83, 0x31, 0x7a, 0xda, 0xbe, 0x8c, 0xd9, 0xf5, 0x3b, 0x2e};
@@ -104,8 +106,13 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 
 	auto dir = modulePath(hMyModule);
 	auto ini = dir / L"PaletteShare.ini";
-	ps::logOpen(dir / L"PaletteShare.log", GetPrivateProfileIntW(L"Debug", L"Log", 0, ini.c_str()) != 0);
-	ps::log("PaletteShare %s starting in %ls", PALETTESHARE_VERSION, dir.c_str());
+	ps::logOpen(dir / L"PaletteShare.log", GetPrivateProfileIntW(L"Debug", L"Log", 1, ini.c_str()) != 0);
+	ps::log("PaletteShare %s (protocol v%d-v%d) starting in %ls", PALETTESHARE_VERSION, ps::proto::MIN_VERSION, ps::proto::VERSION, dir.c_str());
+	if (!ps::sha256SelfTest()) {
+		// Every palette would get the same hash: rather not run at all.
+		ps::log("SHA-256 self-test failed: PaletteShare is off");
+		return false;
+	}
 
 	ps::cache.setDirectory(dir / L"cache");
 	auto library = gameLibrary();

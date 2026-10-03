@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.20)
 set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-project(PaletteShare VERSION 1.0.0 LANGUAGES CXX)
+project(PaletteShare VERSION 1.0.0 LANGUAGES CXX ASM_MASM)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,6 +23,9 @@ add_library(PaletteShare MODULE
 	src/log.cpp
 	src/palette.hpp
 	src/palette.cpp
+	src/palette_game.cpp
+	src/palettefile.hpp
+	src/palettefile.cpp
 	src/hooks.hpp
 	src/hooks.cpp
 	src/net.hpp
@@ -41,13 +44,44 @@ add_library(PaletteShare MODULE
 	src/replay.cpp
 	src/replaymeta.hpp
 	src/replaymeta.cpp
+	src/patch.hpp
+	src/patch.cpp
+	src/game.hpp
+	src/game.cpp
+	src/guard.hpp
+	src/sha256.hpp
+	src/sha256.cpp
+	src/win7.cpp
+	src/win7.asm
+	src/base64.hpp
+	src/base64.cpp
+	src/metaformat.hpp
+	src/metaformat.cpp
 	src/original.hpp
 	src/original.cpp
 )
 target_compile_definitions(PaletteShare PRIVATE
-	NOMINMAX _CRT_SECURE_NO_WARNINGS # no WIN32_LEAN_AND_MEAN: SokuLib's headers need winsock from <windows.h>
+	NOMINMAX _CRT_SECURE_NO_WARNINGS
+	_WIN32_WINNT=0x0601 WINVER=0x0601  # Windows 7: no newer Windows API by accident # no WIN32_LEAN_AND_MEAN: SokuLib's headers need winsock from <windows.h>
 	PALETTESHARE_VERSION="${PROJECT_VERSION}")
 target_include_directories(PaletteShare PRIVATE thirdparty)  # nlohmann/json.hpp (3.9.1, MIT)
-target_compile_options(PaletteShare PRIVATE /W3 /utf-8)
-target_link_libraries(PaletteShare PRIVATE SokuLib bcrypt shlwapi ws2_32 shell32)
+target_compile_options(PaletteShare PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W3 /utf-8>)
+target_link_libraries(PaletteShare PRIVATE SokuLib shlwapi ws2_32 shell32)
 set_target_properties(PaletteShare PROPERTIES PREFIX "")
+
+# Tests for the parts that don't need the game (tools\test.bat builds and runs them).
+add_executable(PaletteShareTests EXCLUDE_FROM_ALL
+	tests/tests.cpp
+	src/sha256.cpp
+	src/base64.cpp
+	src/metaformat.cpp
+	src/protocol.cpp
+	src/palette.cpp
+	src/palettefile.cpp
+	src/log.cpp
+)
+target_include_directories(PaletteShareTests PRIVATE thirdparty)
+target_compile_definitions(PaletteShareTests PRIVATE
+	NOMINMAX _CRT_SECURE_NO_WARNINGS _WIN32_WINNT=0x0601 WINVER=0x0601
+	PALETTESHARE_VERSION="${PROJECT_VERSION}")
+target_compile_options(PaletteShareTests PRIVATE /W3 /utf-8)

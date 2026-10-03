@@ -1,7 +1,9 @@
 #include "replay.hpp"
+#include "base64.hpp"
 #include "log.hpp"
 #include "replaymeta.hpp"
 #include <cstring>
+#include <windows.h>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -21,42 +23,6 @@ namespace ps::replay {
 		std::mutex g_mutex;
 		Entry g_recorded[2];
 
-		const char BASE64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-		std::string encode(const std::vector<uint8_t> &data)
-		{
-			std::string out;
-			for (size_t i = 0; i < data.size(); i += 3) {
-				uint32_t v = data[i] << 16 | (i + 1 < data.size() ? data[i + 1] << 8 : 0) | (i + 2 < data.size() ? data[i + 2] : 0);
-				out += BASE64[v >> 18 & 63];
-				out += BASE64[v >> 12 & 63];
-				out += i + 1 < data.size() ? BASE64[v >> 6 & 63] : '=';
-				out += i + 2 < data.size() ? BASE64[v & 63] : '=';
-			}
-			return out;
-		}
-
-		std::optional<std::vector<uint8_t>> decode(const std::string &text)
-		{
-			std::vector<uint8_t> out;
-			uint32_t v = 0;
-			int bits = 0;
-			for (char c : text) {
-				if (c == '=')
-					break;
-				auto p = strchr(BASE64, c);
-				if (!p || !c)
-					return std::nullopt;
-				v = v << 6 | static_cast<uint32_t>(p - BASE64);
-				bits += 6;
-				if (bits >= 8) {
-					bits -= 8;
-					out.push_back(static_cast<uint8_t>(v >> bits));
-				}
-			}
-			return out;
-		}
-
 		std::optional<int> intField(const nlohmann::json &object, const char *key)
 		{
 			auto it = object.find(key);
@@ -72,7 +38,7 @@ namespace ps::replay {
 			for (int side = 0; side < 2; side++) {
 				auto &e = g_recorded[side];
 				if (e.palette && e.palette->valid())
-					palettes[SIDES[side]] = {{"character", e.charId}, {"slot", e.slot}, {"palette", encode(e.palette->serialize())}};
+					palettes[SIDES[side]] = {{"character", e.charId}, {"slot", e.slot}, {"palette", base64::encode(e.palette->serialize())}};
 			}
 			if (palettes.empty())
 				meta::clearPending(KEY);
@@ -81,11 +47,18 @@ namespace ps::replay {
 		}
 	}
 
-	void record(int side, int charId, int slot, const std::optional<Palette> &custom)
+	void record(int side, int charId, int slot, const std::optional<Palette> &custom, bool atLoad)
 	{
 		if (side < 0 || side > 1)
 			return;
 		std::lock_guard lock(g_mutex);
+		static ULONGLONG lastLoad = 0;
+		if (atLoad) {
+			ULONGLONG now = GetTickCount64();
+			if (now - lastLoad > 5000)
+				g_recorded[0] = g_recorded[1] = Entry{};  // a new match
+			lastLoad = now;
+		}
 		g_recorded[side] = {charId, slot, custom};
 		publish();
 	}
@@ -119,7 +92,7 @@ namespace ps::replay {
 		auto text = entry->find("palette");
 		if (text == entry->end() || !text->is_string())
 			return std::nullopt;
-		auto bytes = decode(text->get<std::string>());
+		auto bytes = base64::decode(text->get<std::string>());
 		auto palette = bytes ? Palette::deserialize(bytes->data(), bytes->size()) : std::nullopt;
 		if (palette)
 			log("replay: side=%d char=%d slot=%d has a recorded palette %s", side, charId, slot, hashPalette(*palette).hex().c_str());
