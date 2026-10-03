@@ -47,7 +47,8 @@ namespace ps {
 	struct CharacterLibrary {
 		int charId = -1;
 		std::wstring folderName;
-		std::filesystem::path folder;
+		std::filesystem::path folder;     // the library's folder: palettes.ini lives here
+		std::filesystem::path modFolder;  // the mod folder's palettes/<character>, also read (or empty)
 		int defaultFallback = 0;
 		std::vector<LibraryPalette> palettes;  // sorted by name
 		std::vector<SkippedFile> skipped;      // palette-like files that couldn't be read
@@ -56,7 +57,11 @@ namespace ps {
 		int lastSlot[2] = {-1, -1};
 	};
 
-	void setLibraryRoot(const std::filesystem::path &root);
+	// Palettes are read from `main` (Documents\PaletteShare\palettes when possible, which removing
+	// or updating the mod never touches) and from `mod` (modules\PaletteShare\palettes); a file in
+	// `main` wins over one of the same name in `mod`. palettes.ini is kept in `main`; the first time
+	// a character is used there, the mod folder's palettes.ini is copied over.
+	void setLibraryRoots(const std::filesystem::path &main, const std::filesystem::path &mod);
 	// Loaded (and cached) on first use; rescanned when the folder changed since.
 	const CharacterLibrary &library(int charId);
 	// who: 0 = the player's own choice, 1 = player 2 offline.

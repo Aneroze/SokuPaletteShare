@@ -49,5 +49,5 @@ target_compile_definitions(PaletteShare PRIVATE
 	PALETTESHARE_VERSION="${PROJECT_VERSION}")
 target_include_directories(PaletteShare PRIVATE thirdparty)  # nlohmann/json.hpp (3.9.1, MIT)
 target_compile_options(PaletteShare PRIVATE /W3 /utf-8)
-target_link_libraries(PaletteShare PRIVATE SokuLib bcrypt shlwapi ws2_32 shell32)
+target_link_libraries(PaletteShare PRIVATE SokuLib bcrypt shlwapi ws2_32 shell32 ole32)
 set_target_properties(PaletteShare PROPERTIES PREFIX "")

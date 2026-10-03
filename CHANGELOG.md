@@ -56,6 +56,9 @@
   to 1.0.0; only the game's actual opponent is accepted.
 - Limits on what a peer can send: character and slot checked, at most 32 new palettes per session;
   the cache keeps the palettes of the session in memory and trims itself past 2000 files.
+- Your palettes live in `Documents\PaletteShare\palettes\<character>\`, outside the game, so
+  updating or removing the mod in SokuLauncher (which deletes the mod's folder) keeps them; the mod
+  folder's `palettes\` is read too, and its `palettes.ini` is copied over on first use.
 - palettes.ini is UTF-16 (any file name survives) and palettes use `[palette:<name>]` sections
   (old `[<name>]` sections are still read).
 - palette-picker is detected once every mod is loaded, whatever the load order.

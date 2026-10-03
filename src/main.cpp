@@ -1,4 +1,7 @@
 #include <windows.h>
+#include <shlobj.h>
+#include <knownfolders.h>
+#include <fstream>
 #include <filesystem>
 #include <string>
 #include "hooks.hpp"
@@ -20,6 +23,29 @@ static std::filesystem::path modulePath(HMODULE module)
 		buffer.resize(buffer.size() * 2);
 	buffer.resize(len);
 	return std::filesystem::path(buffer).parent_path();
+}
+
+// Documents\PaletteShare\palettes, if it can be created and written to: outside the game, so
+// updating or removing the mod (SokuLauncher deletes the mod's folder) never takes the palettes.
+static std::filesystem::path outsideLibrary()
+{
+	PWSTR documents = nullptr;
+	std::filesystem::path folder;
+	if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_CREATE, nullptr, &documents)) && documents)
+		folder = std::filesystem::path(documents) / L"PaletteShare" / L"palettes";
+	CoTaskMemFree(documents);
+	if (folder.empty())
+		return {};
+	std::error_code ec;
+	std::filesystem::create_directories(folder, ec);
+	auto probe = folder / L".write-test";
+	{
+		std::ofstream out(probe);
+		if (!(out << "ok"))
+			return {};
+	}
+	std::filesystem::remove(probe, ec);
+	return folder;
 }
 
 static std::string iniString(const std::filesystem::path &ini, const wchar_t *section, const wchar_t *key)
@@ -88,7 +114,14 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 	ps::log("PaletteShare %s starting in %ls", PALETTESHARE_VERSION, dir.c_str());
 
 	ps::cache.setDirectory(dir / L"cache");
-	ps::setLibraryRoot(dir / L"palettes");
+	auto library = outsideLibrary();
+	if (library.empty()) {
+		library = dir / L"palettes";
+		ps::log("library: Documents\\PaletteShare isn't usable, keeping palettes in %ls", library.c_str());
+	} else {
+		ps::log("library: %ls (palettes in %ls are read too)", library.c_str(), (dir / L"palettes").c_str());
+	}
+	ps::setLibraryRoots(library, dir / L"palettes");
 	loadConfig(ini);
 	ps::installHooks();
 	ps::net::install();

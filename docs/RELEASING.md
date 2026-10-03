@@ -7,6 +7,11 @@ build.bat
 pwsh -File tools\package.ps1
 ```
 
+Never put a palette file or a `palettes.ini` in the zip: SokuLauncher updates a mod by copying the
+new zip's files over the old folder, so they would overwrite a player's own (it deletes nothing
+else; `configFiles` in mod.json, i.e. `PaletteShare.ini`, is kept). Removing the mod deletes the
+whole folder, which is why the library lives in `Documents\PaletteShare\palettes`.
+
 `dist\PaletteShare-<version>.zip` contains `PaletteShare\PaletteShare.dll`, `mod.json`,
 `PaletteShare.ini`, `README.md`, `LICENSE` (MIT) and `THIRD-PARTY-NOTICES.txt` (the MIT notices of
 SokuLib and nlohmann/json, which are compiled into the DLL), the same layout as other SokuLauncher

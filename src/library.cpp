@@ -9,10 +9,12 @@
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <set>
 
 namespace ps {
 	namespace {
-		std::filesystem::path g_root;
+		std::filesystem::path g_root;     // where palettes.ini lives (see setLibraryRoots)
+		std::filesystem::path g_modRoot;  // also read, when it's another folder
 		std::mutex g_mutex;
 		std::map<int, CharacterLibrary> g_cache;
 		std::map<int, std::filesystem::file_time_type> g_stamp;
@@ -266,10 +268,17 @@ namespace ps {
 			if (lib.folderName.empty())
 				return lib;
 			lib.folder = g_root / lib.folderName;
+			if (!g_modRoot.empty() && g_modRoot != g_root)
+				lib.modFolder = g_modRoot / lib.folderName;
 			std::error_code ec;
 			std::filesystem::create_directories(lib.folder, ec);
 
 			auto ini = (lib.folder / L"palettes.ini").wstring();
+			if (!lib.modFolder.empty() && !std::filesystem::exists(ini, ec) && std::filesystem::exists(lib.modFolder / L"palettes.ini", ec)) {
+				// First use of the library folder: bring the fallbacks along (the old file stays).
+				std::filesystem::copy_file(lib.modFolder / L"palettes.ini", ini, ec);
+				log("library: %ls settings copied from the mod folder%s", lib.folderName.c_str(), ec ? " FAILED" : "");
+			}
 			lib.defaultFallback = std::clamp<int>(GetPrivateProfileIntW(L"default", L"fallback", 0, ini.c_str()), 0, 7);
 
 			for (int who = 0; who < 2; who++) {
@@ -279,7 +288,15 @@ namespace ps {
 				lib.lastSlot[who] = static_cast<int>(GetPrivateProfileIntW(lastSection(who), L"slot", -1, ini.c_str()));
 			}
 
-			for (auto &entry : std::filesystem::directory_iterator(lib.folder, ec)) {
+			std::vector<std::filesystem::directory_entry> entries;
+			for (auto &dir : {lib.folder, lib.modFolder}) {
+				if (dir.empty())
+					continue;
+				for (auto &entry : std::filesystem::directory_iterator(dir, ec))
+					entries.push_back(entry);
+			}
+			std::set<std::wstring> seen;  // the library folder's files come first and win
+			for (auto &entry : entries) {
 				if (!entry.is_regular_file())
 					continue;
 				auto ext = lower(entry.path().extension().wstring());
@@ -290,6 +307,10 @@ namespace ps {
 				if (!palette) {
 					log("library: %ls skipped: %s", entry.path().filename().c_str(), why);
 					lib.skipped.push_back({entry.path().filename().wstring(), why});
+					continue;
+				}
+				if (!seen.insert(lower(entry.path().stem().wstring())).second) {
+					log("library: %ls ignored, a palette of that name is already in the library folder", entry.path().c_str());
 					continue;
 				}
 				LibraryPalette item;
@@ -310,6 +331,14 @@ namespace ps {
 			return lib;
 		}
 
+		std::filesystem::file_time_type stampOf(const std::filesystem::path &folder);
+
+		std::filesystem::file_time_type stampOf(const CharacterLibrary &lib)
+		{
+			auto stamp = stampOf(lib.folder);
+			return lib.modFolder.empty() ? stamp : (std::max)(stamp, stampOf(lib.modFolder));
+		}
+
 		std::filesystem::file_time_type stampOf(const std::filesystem::path &folder)
 		{
 			// The folder's own time changes when files are added/removed; palettes.ini and edited
@@ -322,9 +351,10 @@ namespace ps {
 		}
 	}
 
-	void setLibraryRoot(const std::filesystem::path &root)
+	void setLibraryRoots(const std::filesystem::path &main, const std::filesystem::path &mod)
 	{
-		g_root = root;
+		g_root = main;
+		g_modRoot = mod;
 		std::error_code ec;
 		std::filesystem::create_directories(g_root, ec);
 		// Every playable character's folder up front, so players can see where palettes go. Fixed
@@ -342,12 +372,12 @@ namespace ps {
 	{
 		std::lock_guard lock(g_mutex);
 		auto it = g_cache.find(charId);
-		if (it != g_cache.end() && !it->second.folder.empty() && stampOf(it->second.folder) == g_stamp[charId])
+		if (it != g_cache.end() && !it->second.folder.empty() && stampOf(it->second) == g_stamp[charId])
 			return it->second;
 
 		auto lib = load(charId);
 		if (!lib.folder.empty())
-			g_stamp[charId] = stampOf(lib.folder);
+			g_stamp[charId] = stampOf(lib);
 		return g_cache[charId] = std::move(lib);
 	}
 
@@ -366,7 +396,7 @@ namespace ps {
 		ensureUnicode(ini);
 		WritePrivateProfileStringW(lastSection(who), L"palette", customName.c_str(), ini.c_str());
 		WritePrivateProfileStringW(lastSection(who), L"slot", std::to_wstring(slot).c_str(), ini.c_str());
-		g_stamp[charId] = stampOf(lib.folder);  // our own write isn't a reason to rescan
+		g_stamp[charId] = stampOf(lib);  // our own write isn't a reason to rescan
 	}
 
 	void setFallback(int charId, const std::wstring &name, int slot)
@@ -386,7 +416,7 @@ namespace ps {
 		WritePrivateProfileStringW(sectionOf(name).c_str(), L"fallback", std::to_wstring(slot).c_str(), ini.c_str());
 		if (hasLegacySection(name))
 			WritePrivateProfileStringW(name.c_str(), nullptr, nullptr, ini.c_str());
-		g_stamp[charId] = stampOf(lib.folder);
+		g_stamp[charId] = stampOf(lib);
 		log("library: %ls/%ls fallback set to %d", lib.folderName.c_str(), name.c_str(), slot);
 	}
 
@@ -407,7 +437,7 @@ namespace ps {
 		WritePrivateProfileStringW(sectionOf(name).c_str(), nullptr, nullptr, ini.c_str());
 		if (hasLegacySection(name))
 			WritePrivateProfileStringW(name.c_str(), nullptr, nullptr, ini.c_str());
-		g_stamp[charId] = stampOf(lib.folder);
+		g_stamp[charId] = stampOf(lib);
 		log("library: %ls/%ls fallback cleared (default %d)", lib.folderName.c_str(), name.c_str(), lib.defaultFallback);
 	}
 
@@ -425,7 +455,7 @@ namespace ps {
 		auto ini = (lib.folder / L"palettes.ini").wstring();
 		ensureUnicode(ini);
 		WritePrivateProfileStringW(L"default", L"fallback", std::to_wstring(slot).c_str(), ini.c_str());
-		g_stamp[charId] = stampOf(lib.folder);
+		g_stamp[charId] = stampOf(lib);
 		log("library: %ls default fallback set to %d", lib.folderName.c_str(), slot);
 	}
 
