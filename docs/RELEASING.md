@@ -8,7 +8,8 @@ powershell -File tools\package.ps1
 ```
 
 `dist\PaletteShare-<version>.zip` contains `PaletteShare\PaletteShare.dll`, `mod.json` and
-`PaletteShare.ini`, the same layout as other SokuLauncher mods.
+`PaletteShare.ini`, the same layout as other SokuLauncher mods, plus an empty
+`PaletteShare\palettes\<character>\` folder for each of the 20 characters.
 
 ## Before 1.0.0 (needs a person, not a script)
 
