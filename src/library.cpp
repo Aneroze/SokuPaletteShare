@@ -204,6 +204,49 @@ namespace ps {
 		// [last] is the player's own choice (player 1, or our side online); [last2p] player 2's offline.
 		const wchar_t *lastSection(int who) { return who == 0 ? L"last" : L"last2p"; }
 
+		// A palette's section: [palette:<file name>], so no file name can clash with [default] or
+		// [last]. Entries without a file ("*mod 03", "*original 03") use their own name: '*' can't be
+		// in a file name.
+		std::wstring sectionOf(const std::wstring &name) { return name[0] == L'*' ? name : L"palette:" + name; }
+
+		// Before 1.0.0 a palette's section was its plain file name.
+		bool hasLegacySection(const std::wstring &name)
+		{
+			auto lowered = lower(name);
+			return name[0] != L'*' && lowered != L"default" && lowered != L"last" && lowered != L"last2p";
+		}
+
+		int readFallback(const std::wstring &ini, const std::wstring &name)
+		{
+			int fallback = static_cast<int>(GetPrivateProfileIntW(sectionOf(name).c_str(), L"fallback", -1, ini.c_str()));
+			if (fallback < 0 && hasLegacySection(name))
+				fallback = static_cast<int>(GetPrivateProfileIntW(name.c_str(), L"fallback", -1, ini.c_str()));
+			return fallback;
+		}
+
+		// Windows writes an .ini in the ANSI code page unless the file starts with a UTF-16 byte order
+		// mark, and a name the code page can't hold (e.g. Japanese on a Western system) would turn
+		// into "???". So make sure it's UTF-16 (converting an ANSI one) before writing to it.
+		void ensureUnicode(const std::wstring &ini)
+		{
+			std::ifstream in(ini, std::ios::binary);
+			std::string bytes;
+			if (in)
+				bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+			in.close();
+			if (bytes.size() >= 2 && static_cast<uint8_t>(bytes[0]) == 0xFF && static_cast<uint8_t>(bytes[1]) == 0xFE)
+				return;
+			std::wstring text;
+			if (!bytes.empty()) {
+				int n = MultiByteToWideChar(CP_ACP, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
+				text.resize(n);
+				MultiByteToWideChar(CP_ACP, 0, bytes.data(), static_cast<int>(bytes.size()), text.data(), n);
+			}
+			std::ofstream out(ini, std::ios::binary | std::ios::trunc);
+			out.write("\xFF\xFE", 2);
+			out.write(reinterpret_cast<const char *>(text.data()), text.size() * sizeof(wchar_t));
+		}
+
 		std::wstring charFolderName(int charId)
 		{
 			auto getName = reinterpret_cast<const char *(*)(int)>(0x43F3F0);
@@ -255,7 +298,7 @@ namespace ps {
 				item.palette = std::move(*palette);
 				item.hash = hashPalette(item.palette);
 				log("library: %ls loaded (%s)", entry.path().filename().c_str(), item.hash.hex().c_str());
-				int fallback = static_cast<int>(GetPrivateProfileIntW(item.name.c_str(), L"fallback", -1, ini.c_str()));
+				int fallback = readFallback(ini, item.name);
 				item.fallbackIsDefault = fallback < 0 || fallback > 7;
 				item.fallback = item.fallbackIsDefault ? lib.defaultFallback : fallback;
 				lib.palettes.push_back(std::move(item));
@@ -320,6 +363,7 @@ namespace ps {
 		lib.lastSelected[who] = customName;
 		lib.lastSlot[who] = slot;
 		auto ini = (lib.folder / L"palettes.ini").wstring();
+		ensureUnicode(ini);
 		WritePrivateProfileStringW(lastSection(who), L"palette", customName.c_str(), ini.c_str());
 		WritePrivateProfileStringW(lastSection(who), L"slot", std::to_wstring(slot).c_str(), ini.c_str());
 		g_stamp[charId] = stampOf(lib.folder);  // our own write isn't a reason to rescan
@@ -338,7 +382,10 @@ namespace ps {
 				p.fallbackIsDefault = false;
 			}
 		auto ini = (lib.folder / L"palettes.ini").wstring();
-		WritePrivateProfileStringW(name.c_str(), L"fallback", std::to_wstring(slot).c_str(), ini.c_str());
+		ensureUnicode(ini);
+		WritePrivateProfileStringW(sectionOf(name).c_str(), L"fallback", std::to_wstring(slot).c_str(), ini.c_str());
+		if (hasLegacySection(name))
+			WritePrivateProfileStringW(name.c_str(), nullptr, nullptr, ini.c_str());
 		g_stamp[charId] = stampOf(lib.folder);
 		log("library: %ls/%ls fallback set to %d", lib.folderName.c_str(), name.c_str(), slot);
 	}
@@ -356,7 +403,10 @@ namespace ps {
 				p.fallbackIsDefault = true;
 			}
 		auto ini = (lib.folder / L"palettes.ini").wstring();
-		WritePrivateProfileStringW(name.c_str(), L"fallback", nullptr, ini.c_str());
+		ensureUnicode(ini);
+		WritePrivateProfileStringW(sectionOf(name).c_str(), nullptr, nullptr, ini.c_str());
+		if (hasLegacySection(name))
+			WritePrivateProfileStringW(name.c_str(), nullptr, nullptr, ini.c_str());
 		g_stamp[charId] = stampOf(lib.folder);
 		log("library: %ls/%ls fallback cleared (default %d)", lib.folderName.c_str(), name.c_str(), lib.defaultFallback);
 	}
@@ -373,6 +423,7 @@ namespace ps {
 			if (p.fallbackIsDefault)
 				p.fallback = slot;
 		auto ini = (lib.folder / L"palettes.ini").wstring();
+		ensureUnicode(ini);
 		WritePrivateProfileStringW(L"default", L"fallback", std::to_wstring(slot).c_str(), ini.c_str());
 		g_stamp[charId] = stampOf(lib.folder);
 		log("library: %ls default fallback set to %d", lib.folderName.c_str(), slot);
@@ -387,7 +438,7 @@ namespace ps {
 			item.name = std::move(name);
 			item.palette = std::move(palette);
 			item.hash = hashPalette(item.palette);
-			int fallback = lib.folder.empty() ? -1 : static_cast<int>(GetPrivateProfileIntW(item.name.c_str(), L"fallback", -1, ini.c_str()));
+			int fallback = lib.folder.empty() ? -1 : readFallback(ini, item.name);
 			item.fallbackIsDefault = fallback < 0 || fallback > 7;
 			item.fallback = item.fallbackIsDefault ? slot : fallback;
 			return item;

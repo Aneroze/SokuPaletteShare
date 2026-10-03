@@ -53,6 +53,11 @@ namespace ps::picker {
 			int takenSlot = -1;
 			std::optional<Palette> takenPalette;
 			bool pendingConfirm = false;
+			// Frames since we sent the confirm (A), -1 = none sent. Online the game applies it only
+			// after the netplay delay; until then the list and the wheel must not move, or the slot
+			// (and our confirmed palette) would change under the confirm.
+			int confirmSent = -1;
+			bool inSubmenu = false;  // a submenu was open over the select screen last frame
 			bool editing = false;    // D: changing the highlighted palette's fallback
 			const SokuLib::KeymapManager *keys = nullptr;  // drives this pick (for the key hints)
 			int editSlot = 0;
@@ -106,7 +111,18 @@ namespace ps::picker {
 
 		std::mutex g_mutex;  // customFor() is called from the loader thread
 		Pick g_picks[2];
-		bool g_disabled = false;
+		// palette-picker owns the palette step when it's loaded. Checked on first use, once every
+		// mod is loaded (it may load after us).
+		bool disabled()
+		{
+			static int state = -1;
+			if (state < 0) {
+				state = GetModuleHandleA("palette-picker.dll") ? 1 : 0;
+				if (state)
+					log("picker: palette-picker is loaded, so PaletteShare's picker is off");
+			}
+			return state == 1;
+		}
 
 		void (__fastcall *orig_setInputs)(void *mgr, void *edx) = nullptr;
 
@@ -180,12 +196,12 @@ namespace ps::picker {
 			return id == SokuLib::CHARACTER_RANDOM || id == SokuLib::CHARACTER_NAMAZU ? -1 : id;
 		}
 
-		void startPick(Pick &pick, int side, int charId, int wheel)
+		// The pick's snapshot of the character's palettes: library files, replaced slots, slot colors.
+		int loadLibrary(Pick &pick, int charId)
 		{
-			pick = Pick{};
-			pick.active = true;
-			pick.charId = charId;
 			pick.lib = library(charId);
+			for (auto &m : pick.mods)
+				m.reset();
 			addModdedSlots(pick.lib, config.showOriginalPalettes);
 			int modded = 0;
 			for (auto it = pick.lib.palettes.begin(); it != pick.lib.palettes.end();) {
@@ -199,6 +215,15 @@ namespace ps::picker {
 			}
 			for (int slot = 0; slot < 8; slot++)
 				pick.slotPalettes[slot] = ui::gameSlot(charId, slot);
+			return modded;
+		}
+
+		void startPick(Pick &pick, int side, int charId, int wheel)
+		{
+			pick = Pick{};
+			pick.active = true;
+			pick.charId = charId;
+			int modded = loadLibrary(pick, charId);
 			pick.index = wheel;
 			int who = memoryOf(side);
 			if (!pick.lib.lastSelected[who].empty()) {
@@ -211,6 +236,25 @@ namespace ps::picker {
 			pick.previewDirty = true;
 			log("picker: palette step for side=%d char=%d, %d custom palette(s), %d slot(s) replaced by palette mods, starting at %d", side,
 				charId, (int)pick.lib.palettes.size(), modded, pick.index);
+		}
+
+		// After a submenu (e.g. the palette menu from the deck screen): fallbacks or files may have
+		// changed. Reload, staying on the same entry (by slot or file name) where it still exists.
+		void reloadPick(Pick &pick)
+		{
+			std::wstring name;
+			if (pick.index >= 8)
+				name = pick.lib.palettes[pick.index - 8].name;
+			int slot = pick.index < 8 ? pick.index : -1;
+			loadLibrary(pick, pick.charId);
+			pick.index = slot >= 0 ? slot : 0;
+			for (int i = 8; i < pick.count(); i++)
+				if (pick.lib.palettes[i - 8].name == name)
+					pick.index = i;
+			pick.previewDirty = true;
+			pick.presses = 0;
+			pick.unreachable = -1;
+			log("picker: palettes reloaded after a submenu, now at %d", pick.index);
 		}
 
 		// Mirror match: what the other side uses, as the game decides it (0x4204A0: only once the
@@ -305,11 +349,30 @@ namespace ps::picker {
 				pick.pendingConfirm = false;
 				pick.steer = Steer::Idle;
 				pick.editing = false;
+				pick.inSubmenu = true;
 				return true;
+			}
+			if (pick.inSubmenu) {
+				pick.inSubmenu = false;
+				reloadPick(pick);
 			}
 
 			auto &in = *reinterpret_cast<SokuLib::KeyInput *>(reinterpret_cast<char *>(mgr) + KEYINPUT_OFFSET);
 			auto &bits = *reinterpret_cast<uint16_t *>(reinterpret_cast<char *>(mgr) + OUTKEYS_OFFSET);
+
+			// Confirm sent, the game hasn't applied it yet: keep everything still (B, the deck keys
+			// and C still reach the game).
+			if (pick.confirmSent >= 0) {
+				if (++pick.confirmSent <= STEER_TIMEOUT_FRAMES) {
+					in.verticalAxis = 0;
+					in.a = 0;
+					in.d = 0;
+					bits &= ~(1 | 2 | 16 | 128);
+					return true;
+				}
+				log("picker: the confirm wasn't applied, picking again");
+				pick.confirmSent = -1;
+			}
 			bool editing = pick.editing;
 
 			if (editing) {
@@ -369,6 +432,7 @@ namespace ps::picker {
 			if (!pick.editing && pick.pendingConfirm && settled) {
 				emitA = 1;
 				pick.pendingConfirm = false;
+				pick.confirmSent = 0;
 				pick.confirmed = true;
 				pick.confirmedChar = charId;
 				auto custom = pick.custom();
@@ -433,7 +497,7 @@ namespace ps::picker {
 				it->second.active = false;
 			}
 			orig_setInputs(mgr, edx);
-			if (g_disabled)
+			if (disabled())
 				return;
 			auto &o = g_overrides[mgr];
 			o.real = in;
@@ -444,9 +508,11 @@ namespace ps::picker {
 
 		// --- drawing ---------------------------------------------------------------------------
 
-		ui::Text g_text;
-		ui::PalettePreview g_customPreview[2];
-		ui::PalettePreview g_fallbackPreview[2];
+		// Never destroyed: their destructors free textures through the game, which may already be
+		// gone when the process exits.
+		ui::Text &g_text = *new ui::Text;
+		ui::PalettePreview *const g_customPreview = new ui::PalettePreview[2];
+		ui::PalettePreview *const g_fallbackPreview = new ui::PalettePreview[2];
 
 		std::string entryName(const Pick &pick, int index)
 		{
@@ -589,8 +655,11 @@ namespace ps::picker {
 			static int __fastcall hook(void *self)
 			{
 				auto sel = static_cast<SokuLib::Select *>(self);
+				// Ctrl+P works here too: the opponent's preview follows it.
+				if (pollOpponentToggle())
+					g_seenGeneration--;  // rebuild their preview with or without their palette
 				refreshOpponentPreview(sel);
-				if (!g_disabled) {
+				if (!disabled()) {
 					for (int side = 0; side < 2; side++) {
 						std::unique_lock lock(g_mutex);
 						auto &pick = g_picks[side];
@@ -601,7 +670,7 @@ namespace ps::picker {
 					}
 				}
 				int ret = orig(self);
-				if (!g_disabled) {
+				if (!disabled()) {
 					std::lock_guard lock(g_mutex);
 					for (int side = 0; side < 2; side++) {
 						if (g_picks[side].active && keysOf(sel, side) && !submenuOpen())
@@ -629,6 +698,8 @@ namespace ps::picker {
 	{
 		if (player < 0 || player > 1)
 			return std::nullopt;
+		if (disabled())
+			return std::nullopt;
 		std::lock_guard lock(g_mutex);
 		auto &pick = g_picks[player];
 		if (pick.active && pick.charId == charId) {
@@ -647,7 +718,7 @@ namespace ps::picker {
 
 	std::optional<Palette> customFor(int player, int charId)
 	{
-		if (player < 0 || player > 1)
+		if (player < 0 || player > 1 || disabled())
 			return std::nullopt;
 		std::lock_guard lock(g_mutex);
 		auto &pick = g_picks[player];
@@ -663,12 +734,6 @@ namespace ps::picker {
 
 	void install()
 	{
-		if (GetModuleHandleA("palette-picker.dll")) {
-			g_disabled = true;
-			log("picker: palette-picker is loaded, so PaletteShare's picker is off");
-			return;
-		}
-
 		DWORD old;
 		VirtualProtect(reinterpret_cast<LPVOID>(TEXT_SECTION_OFFSET), TEXT_SECTION_SIZE, PAGE_EXECUTE_WRITECOPY, &old);
 		orig_setInputs = SokuLib::TamperNearCall(SETINPUTS_CALL, onSetInputs);

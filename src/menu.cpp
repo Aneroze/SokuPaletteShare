@@ -198,10 +198,22 @@ namespace ps::menu {
 			ui::PalettePreview _fallback;
 		};
 
+		// palette-picker uses the same key there. Checked on first use, once every mod is loaded.
+		bool disabled()
+		{
+			static int state = -1;
+			if (state < 0) {
+				state = GetModuleHandleA("palette-picker.dll") ? 1 : 0;
+				if (state)
+					log("menu: palette-picker is loaded (it uses the same key there), palette menu off");
+			}
+			return state == 1;
+		}
+
 		int __fastcall onDeckMenuProcess(void *self)
 		{
 			int charId = *reinterpret_cast<int *>(reinterpret_cast<char *>(self) + DECK_MENU_CHARACTER);
-			if (menuKeys().c == 1 && charId >= 0) {
+			if (!disabled() && menuKeys().c == 1 && charId >= 0) {
 				SokuLib::playSEWaveBuffer(SE_OK);
 				log("menu: palette menu for char=%d", charId);
 				SokuLib::activateMenu(new PaletteMenu(charId));
@@ -213,10 +225,6 @@ namespace ps::menu {
 
 	void install()
 	{
-		if (GetModuleHandleA("palette-picker.dll")) {
-			log("menu: palette-picker is loaded (it uses the same key there), palette menu off");
-			return;
-		}
 		DWORD old;
 		auto slot = reinterpret_cast<DWORD *>(DECK_MENU_PROCESS_SLOT);
 		VirtualProtect(slot, 4, PAGE_READWRITE, &old);

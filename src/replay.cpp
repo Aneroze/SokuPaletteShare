@@ -57,6 +57,14 @@ namespace ps::replay {
 			return out;
 		}
 
+		std::optional<int> intField(const nlohmann::json &object, const char *key)
+		{
+			auto it = object.find(key);
+			if (it == object.end() || !it->is_number_integer())
+				return std::nullopt;
+			return it->get<int>();
+		}
+
 		// Our key's value for the replays saved from now on (caller holds g_mutex).
 		void publish()
 		{
@@ -86,8 +94,19 @@ namespace ps::replay {
 	{
 		if (side < 0 || side > 1)
 			return std::nullopt;
+		// Replays come from anywhere: a malformed file must never take the game down.
+		try {
+			return recorded(side, charId, slot);
+		} catch (...) {
+			log("replay: the watched replay's PaletteShare data is malformed, ignored");
+			return std::nullopt;
+		}
+	}
+
+	std::optional<Palette> recorded(int side, int charId, int slot)
+	{
 		auto ours = meta::watched(KEY);
-		if (!ours || !ours->is_object() || ours->value("version", 0) != VERSION)
+		if (!ours || !ours->is_object() || intField(*ours, "version") != VERSION)
 			return std::nullopt;
 		auto palettes = ours->find("palettes");
 		if (palettes == ours->end() || !palettes->is_object())
@@ -95,7 +114,7 @@ namespace ps::replay {
 		auto entry = palettes->find(SIDES[side]);
 		if (entry == palettes->end() || !entry->is_object())
 			return std::nullopt;
-		if (entry->value("character", -1) != charId || entry->value("slot", -1) != slot)
+		if (intField(*entry, "character") != charId || intField(*entry, "slot") != slot)
 			return std::nullopt;
 		auto text = entry->find("palette");
 		if (text == entry->end() || !text->is_string())

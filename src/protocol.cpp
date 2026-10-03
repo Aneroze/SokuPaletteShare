@@ -77,6 +77,11 @@ namespace ps::proto {
 		Writer w(KIND_HELLO);
 		w.u8(role);
 		w.u8(isReply ? 1 : 0);
+		w.u8(MIN_VERSION);
+		w.u8(VERSION);
+		const char *mod = PALETTESHARE_VERSION;
+		w.u8(static_cast<uint8_t>(strlen(mod)));
+		w.bytes(reinterpret_cast<const uint8_t *>(mod), strlen(mod));
 		return w.take();
 	}
 
@@ -116,7 +121,20 @@ namespace ps::proto {
 		if (!r.u8(role) || !r.u8(reply))
 			return std::nullopt;
 		// Newer versions may append fields; only the ones we know are read.
-		return Hello{data[5], static_cast<Role>(role), reply != 0};
+		Hello hello{data[5], static_cast<Role>(role), reply != 0, data[5], data[5], {}};
+		uint8_t lo, hi, length;
+		if (r.u8(lo) && r.u8(hi) && lo <= hi) {
+			hello.minVersion = lo;
+			hello.maxVersion = hi;
+			char mod[256];
+			if (r.u8(length) && r.bytes(reinterpret_cast<uint8_t *>(mod), length)) {
+				hello.modVersion.assign(mod, length);
+				for (auto &c : hello.modVersion)
+					if (c < 0x20 || c > 0x7E)
+						c = '?';  // only for logs
+			}
+		}
+		return hello;
 	}
 
 	std::optional<PaletteChunk> parsePalette(const uint8_t *data, size_t size)
@@ -129,6 +147,8 @@ namespace ps::proto {
 		uint16_t len;
 		if (!r.u32(c.seq) || !r.u16(c.charId) || !r.u8(c.slot) || !r.bytes(c.hash.bytes.data(), c.hash.bytes.size()) ||
 		    !r.u16(c.totalSize) || !r.u16(c.offset) || !r.u16(len))
+			return std::nullopt;
+		if (c.charId >= MAX_CHARACTER_ID || c.slot > 7)
 			return std::nullopt;
 		// Only the two real palette sizes, and a chunk that fits inside it.
 		if (c.totalSize != 1 + Palette::colorBytes(16) && c.totalSize != 1 + Palette::colorBytes(32))

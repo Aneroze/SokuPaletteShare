@@ -1,9 +1,15 @@
 """Make two obviously recolored test palettes from cached vanilla ones and put them in the
-PaletteShare caches of both test installs (named by their PaletteShare hash)."""
-import hashlib, os, shutil, struct
+PaletteShare caches of the given game installs (named by their PaletteShare hash).
 
-INSTALLS = []  # the test installs' Soku folders
-SRC_CACHE = os.path.join(INSTALLS[0], r"modules\PaletteShare\cache")
+  python make_test_palettes.py <Soku folder> [<another Soku folder> ...]
+
+The first folder's cache must already hold Reimu's and Sanae's palette 000 (play them once)."""
+import hashlib, os, shutil, struct, sys
+
+INSTALLS = sys.argv[1:]
+if not INSTALLS:
+    sys.exit(__doc__)
+SRC_CACHE = os.path.join(INSTALLS[0], "modules", "PaletteShare", "cache")
 
 def load(h):
     d = open(os.path.join(SRC_CACHE, h + ".pal"), "rb").read()

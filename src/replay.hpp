@@ -24,4 +24,6 @@ namespace ps::replay {
 	// The custom palette the replay being watched recorded for this side, if it was recorded for
 	// this character and slot.
 	std::optional<Palette> paletteFor(int side, int charId, int slot);
+	// paletteFor without the safety net (may throw on malformed data).
+	std::optional<Palette> recorded(int side, int charId, int slot);
 }

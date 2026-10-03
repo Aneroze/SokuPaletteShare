@@ -2,7 +2,9 @@
 #include "log.hpp"
 #include "net.hpp"
 #include "picker.hpp"
+#include "original.hpp"
 #include "replay.hpp"
+#include "ui.hpp"
 #include <windows.h>
 #include <SokuLib.hpp>
 #include <mutex>
@@ -190,12 +192,24 @@ namespace ps {
 					}
 				}
 			}
-			if (!watchingReplay())
-				replay::record(index, side.charId, side.slot, picked);
 			side.vanilla = readGamePalette(palette);
 			if (!side.vanilla.valid()) {
 				log("load side=%d char=%d slot=%d: palette unreadable (bpp=%d)", index, side.charId, side.slot, (int)palette.bitsPerPixel);
+				if (!watchingReplay())
+					replay::record(index, side.charId, side.slot, picked);
 				return;
+			}
+			if (!watchingReplay()) {
+				// For replays: a side chosen here keeps what it shows if that isn't the game's own
+				// palette for the slot, whatever made it so (our picker, palette-picker, a palette
+				// mod, edited data files).
+				std::optional<Palette> shown = picked;
+				if (!shown && pickedHere(index)) {
+					auto orig = original::palette(ui::internalName(side.charId), side.slot);
+					if (orig && !sameColors(*orig, side.vanilla))
+						shown = side.vanilla;
+				}
+				replay::record(index, side.charId, side.slot, shown);
 			}
 
 			auto hash = hashPalette(side.vanilla);
@@ -265,24 +279,8 @@ namespace ps {
 			}
 		}
 
-		void pollHotkey()
-		{
-			static bool wasDown = false;
-			bool down = (config.hotkeyIgnoresFocus || GetForegroundWindow() == SokuLib::window) &&
-			            (GetAsyncKeyState(config.toggleKey) & 0x8000) &&
-			            (!config.toggleModifier || (GetAsyncKeyState(config.toggleModifier) & 0x8000));
-			if (down && !wasDown) {
-				g_showOpponent = !g_showOpponent;
-				log("hotkey: opponent custom palettes %s", g_showOpponent ? "ON" : "OFF");
-				std::lock_guard lock(g_sidesMutex);
-				for (int i = 0; i < 2; i++)
-					showSide(i, g_showOpponent);
-				SokuLib::playSEWaveBuffer(g_showOpponent ? 0x28 : 0x29);
-			}
-			wasDown = down;
-		}
-
-		// An opponent palette that arrived after their character loaded: show it now.
+		// An opponent palette that arrived after their character loaded, or a newer one replacing
+		// what we show (e.g. they changed their mind at the last moment): show that one now.
 		void pickUpLatePalettes()
 		{
 			unsigned generation = net::remoteGeneration();
@@ -295,15 +293,22 @@ namespace ps {
 				return;
 			std::lock_guard lock(g_sidesMutex);
 			auto &side = g_sides[index];
-			if (side.custom || side.charId < 0 || !side.vanilla.valid() || side.textures.empty())
+			if (side.charId < 0 || !side.vanilla.valid() || side.textures.empty())
 				return;
-			side.custom = customFor(index, side.charId, side.slot, side.vanilla);
-			if (side.custom)
-				replay::record(index, side.charId, side.slot, side.custom);
-			if (side.custom && g_showOpponent) {
-				log("late palette for side=%d, applying", index);
-				showSide(index, true);
-			}
+			auto custom = customFor(index, side.charId, side.slot, side.vanilla);
+			if (custom && looksLikeSide0(index, side.charId, *custom))
+				custom.reset();
+			bool same = custom.has_value() == side.custom.has_value() && (!custom || sameColors(*custom, *side.custom));
+			if (same)
+				return;
+			log("opponent palette for side=%d changed after loading: %s", index, custom ? hashPalette(*custom).hex().c_str() : "none");
+			replay::record(index, side.charId, side.slot, custom);
+			if (side.showingCustom)
+				rebuildTextures(side, custom ? *custom : side.vanilla);
+			else if (custom && g_showOpponent)
+				rebuildTextures(side, *custom);
+			side.custom = std::move(custom);
+			side.showingCustom = side.custom && g_showOpponent;
 		}
 
 		template<int N>
@@ -312,7 +317,11 @@ namespace ps {
 
 			static int __fastcall hook(void *self)
 			{
-				pollHotkey();
+				if (pollOpponentToggle()) {
+					std::lock_guard lock(g_sidesMutex);
+					for (int i = 0; i < 2; i++)
+						showSide(i, g_showOpponent);
+				}
 				pickUpLatePalettes();
 				return orig(self);
 			}
@@ -364,6 +373,22 @@ namespace ps {
 			for (int i = 0; i < nops; i++)
 				*reinterpret_cast<BYTE *>(at + 5 + i) = 0x90;
 		}
+	}
+
+	bool pollOpponentToggle()
+	{
+		static bool wasDown = false;
+		bool down = (config.hotkeyIgnoresFocus || GetForegroundWindow() == SokuLib::window) &&
+		            (GetAsyncKeyState(config.toggleKey) & 0x8000) &&
+		            (!config.toggleModifier || (GetAsyncKeyState(config.toggleModifier) & 0x8000));
+		bool pressed = down && !wasDown;
+		wasDown = down;
+		if (!pressed)
+			return false;
+		g_showOpponent = !g_showOpponent;
+		log("hotkey: opponent custom palettes %s", g_showOpponent ? "ON" : "OFF");
+		SokuLib::playSEWaveBuffer(g_showOpponent ? 0x28 : 0x29);
+		return true;
 	}
 
 	void installHooks()

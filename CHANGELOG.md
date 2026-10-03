@@ -49,10 +49,24 @@
 - Game-format `.pal` files with a few extra bytes at the end (515-byte shady-loader palettes) are
   read.
 - The previous run's log is kept as `PaletteShare.prev.log`.
+- Online: a direction pressed right after confirming no longer cancels the confirmed custom palette
+  (the list and the game's wheel stay still until the game applies the confirm); a newer palette
+  from the opponent replaces one already shown mid-match.
+- HELLO carries the supported protocol range and the mod version, so later versions can still talk
+  to 1.0.0; only the game's actual opponent is accepted.
+- Limits on what a peer can send: character and slot checked, at most 32 new palettes per session;
+  the cache keeps the palettes of the session in memory and trims itself past 2000 files.
+- palettes.ini is UTF-16 (any file name survives) and palettes use `[palette:<name>]` sections
+  (old `[<name>]` sections are still read).
+- palette-picker is detected once every mod is loaded, whatever the load order.
+- Ctrl+P also works at character select. The picker reloads after the deck screen's palette menu.
+- Log lines keep non-ASCII names; the network thread stops at exit.
+- The release zip contains the README, LICENSE (MIT) and the third-party notices.
 - Replays: saving a replay keeps both sides' custom palettes; watching it with PaletteShare shows
   them. Stored as per-replay metadata (JSON, one key per mod) in a `<replay>.meta.json` sidecar by
   default, or with `[Replay] Storage=rep` appended to the `.rep` after the game's data (the game
-  ignores it). Watching reads both.
+  ignores it). Watching reads both. Your own side's palette is kept whatever made it (the picker,
+  palette-picker, a palette mod, edited data files). Malformed replay data is ignored.
 - Character select shows the opponent's palette as soon as it arrives. Before, their preview was
   only rebuilt when their palette wheel moved, usually just before their palette arrived (and never
   for a custom palette on the slot they were already on).

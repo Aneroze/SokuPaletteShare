@@ -11,10 +11,13 @@
 // Files that can't be read are listed with the reason, so the player can see why. palettes.ini in the same folder stores the fallbacks:
 //
 //   [default]
-//   fallback=0        ; slot used by palettes that have no fallback of their own (default 0)
-//   [Blue Reimu]      ; file name without extension
+//   fallback=0               ; slot used by palettes that have no fallback of their own (default 0)
+//   [palette:Blue Reimu]     ; file name without extension (before 1.0.0: [Blue Reimu], still read)
 //   fallback=3
-//   [last] / [last2p] ; the last choice of player 1 (our side online) / player 2 offline
+//   [last] / [last2p]        ; the last choice of player 1 (our side online) / player 2 offline
+//
+// The file is UTF-16 (with a byte order mark) so any file name survives; an ANSI one is converted
+// the first time we write to it.
 //
 // The fallback is the vanilla slot (0-7) the game actually sends, so it is what players without
 // PaletteShare (and spectators/replays) see.

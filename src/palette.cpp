@@ -1,4 +1,6 @@
 #include "palette.hpp"
+#include "log.hpp"
+#include <algorithm>
 #include <windows.h>
 #include <bcrypt.h>
 #include <fstream>
@@ -177,10 +179,34 @@ namespace ps {
 		_dir = dir;
 		std::error_code ec;
 		std::filesystem::create_directories(_dir, ec);
+
+		std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> palettes;
+		for (auto &entry : std::filesystem::directory_iterator(_dir, ec)) {
+			auto ext = entry.path().extension();
+			if (ext == L".tmp")
+				std::filesystem::remove(entry.path(), ec);  // a write that never finished
+			else if (ext == L".pal")
+				palettes.emplace_back(entry.last_write_time(ec), entry.path());
+		}
+		if (palettes.size() <= MAX_FILES)
+			return;
+		std::sort(palettes.begin(), palettes.end(), [](auto &a, auto &b) { return a.first > b.first; });
+		for (size_t i = KEEP_FILES; i < palettes.size(); i++)
+			std::filesystem::remove(palettes[i].second, ec);
+		log("cache: trimmed %d old palette(s)", (int)(palettes.size() - KEEP_FILES));
 	}
 
-	bool PaletteCache::store(const Palette &palette, const PaletteHash &hash) const
+	void PaletteCache::remember(const PaletteHash &hash, const Palette &palette)
 	{
+		std::lock_guard lock(_mutex);
+		if (_memory.size() >= MAX_IN_MEMORY)
+			_memory.clear();
+		_memory[hash.bytes] = palette;
+	}
+
+	bool PaletteCache::store(const Palette &palette, const PaletteHash &hash)
+	{
+		remember(hash, palette);
 		auto file = _dir / (hash.hex() + ".pal");
 		std::error_code ec;
 		if (std::filesystem::exists(file, ec))
@@ -193,15 +219,25 @@ namespace ps {
 			std::ofstream out(tmp, std::ios::binary);
 			auto data = palette.serialize();
 			out.write(reinterpret_cast<const char *>(data.data()), data.size());
-			if (!out)
-				return false;
+		}
+		if (std::filesystem::file_size(tmp, ec) != palette.serialize().size()) {
+			std::filesystem::remove(tmp, ec);
+			return false;  // e.g. a full disk; the palette still works this session (in memory)
 		}
 		std::filesystem::rename(tmp, file, ec);
+		if (ec)
+			std::filesystem::remove(tmp, ec);
 		return !ec;
 	}
 
-	std::optional<Palette> PaletteCache::load(const PaletteHash &hash) const
+	std::optional<Palette> PaletteCache::load(const PaletteHash &hash)
 	{
+		{
+			std::lock_guard lock(_mutex);
+			auto it = _memory.find(hash.bytes);
+			if (it != _memory.end())
+				return it->second;
+		}
 		std::ifstream in(_dir / (hash.hex() + ".pal"), std::ios::binary);
 		if (!in)
 			return std::nullopt;
@@ -210,6 +246,7 @@ namespace ps {
 		auto palette = Palette::deserialize(data.data(), data.size());
 		if (!palette || !(hashPalette(*palette) == hash))
 			return std::nullopt;
+		remember(hash, *palette);
 		return palette;
 	}
 }

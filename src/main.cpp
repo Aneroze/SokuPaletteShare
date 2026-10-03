@@ -98,7 +98,11 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 	return true;
 }
 
-extern "C" __declspec(dllexport) void AtExit() {}
+extern "C" __declspec(dllexport) void AtExit()
+{
+	ps::net::shutdown();
+	ps::log("PaletteShare stopping");
+}
 
 BOOL WINAPI DllMain(HMODULE, DWORD, LPVOID)
 {

@@ -1,4 +1,5 @@
-# Package build\PaletteShare.dll + mod.json + PaletteShare.ini into dist\PaletteShare-<version>.zip
+# Package build\PaletteShare.dll + mod.json + PaletteShare.ini + README.md, LICENSE and the third-party
+# notices into dist\PaletteShare-<version>.zip
 # (folder layout PaletteShare\..., like other SokuLauncher mods), plus an empty palettes\<character>
 # folder per character so players see where palettes go before the first start. Run build.bat first.
 $ErrorActionPreference = 'Stop'
@@ -19,7 +20,8 @@ $characters = 'reimu', 'marisa', 'sakuya', 'alice', 'patchouli', 'youmu', 'remil
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 $z = [IO.Compression.ZipFile]::Open($zip, 'Create')
 try {
-  foreach ($f in @($dll, (Join-Path $root 'mod.json'), (Join-Path $root 'PaletteShare.ini'))) {
+  $files = @($dll) + @('mod.json', 'PaletteShare.ini', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.txt' | ForEach-Object { Join-Path $root $_ })
+  foreach ($f in $files) {
     [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($z, $f, 'PaletteShare/' + (Split-Path -Leaf $f))
   }
   foreach ($c in $characters) { [void]$z.CreateEntry("PaletteShare/palettes/$c/") }

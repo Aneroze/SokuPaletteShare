@@ -2,6 +2,8 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -51,14 +53,21 @@ namespace ps {
 	void writeGamePalette(const Palette &palette, SokuLib::Palette &game);
 	bool trueColorSupported();
 
-	// Content-addressed store: <dir>/<hash>.pal. Loads verify the hash of what they read.
+	// Content-addressed store: <dir>/<hash>.pal, plus the palettes seen this session in memory (so
+	// it works without a writable folder, and a known palette costs no disk read). Loads from disk
+	// verify the hash of what they read. Any thread.
 	class PaletteCache {
 	public:
+		// Also trims the folder: leftover temp files, and the oldest palettes past MAX_FILES.
 		void setDirectory(const std::filesystem::path &dir);
-		bool store(const Palette &palette, const PaletteHash &hash) const;
-		std::optional<Palette> load(const PaletteHash &hash) const;
+		bool store(const Palette &palette, const PaletteHash &hash);
+		std::optional<Palette> load(const PaletteHash &hash);
 
 	private:
+		static constexpr size_t MAX_FILES = 2000, KEEP_FILES = 1500, MAX_IN_MEMORY = 512;
 		std::filesystem::path _dir;
+		std::mutex _mutex;
+		std::map<std::array<uint8_t, 16>, Palette> _memory;
+		void remember(const PaletteHash &hash, const Palette &palette);
 	};
 }

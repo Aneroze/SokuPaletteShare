@@ -12,6 +12,8 @@
 
 namespace ps::net {
 	void install();
+	// Stops the background thread (game exit).
+	void shutdown();
 
 	// Side of the local player in a netplay match as a player (0 = host/left, 1 = client/right),
 	// -1 otherwise (offline, spectating, replays).

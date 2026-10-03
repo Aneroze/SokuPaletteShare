@@ -29,4 +29,8 @@ namespace ps {
 	extern PaletteCache cache;
 
 	void installHooks();
+
+	// The opponent-palette hotkey (Ctrl+P): flips the setting when pressed this frame and says so.
+	// Game thread, once per frame (battle and character select call it).
+	bool pollOpponentToggle();
 }

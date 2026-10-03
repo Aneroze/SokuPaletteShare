@@ -4,6 +4,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <set>
 #include <mutex>
 #include <sstream>
 
@@ -33,6 +34,7 @@ namespace ps::meta {
 		Storage g_storage = Storage::Sidecar;
 		std::mutex g_mutex;
 		std::map<std::string, nlohmann::json> g_pending;  // for the next saved replay
+		std::set<std::string> g_owned;  // keys we write: removed from a sidecar when we have nothing for them
 		nlohmann::json g_watched;                         // the watched replay's sidecar (object or null)
 
 		using Method = int (__fastcall *)(void *self, void *edx, const char *path);
@@ -66,6 +68,45 @@ namespace ps::meta {
 			DWORD n = GetFinalPathNameByHandleW(file, buffer, static_cast<DWORD>(std::size(buffer)), FILE_NAME_NORMALIZED);
 			CloseHandle(file);
 			return n && n < std::size(buffer) ? std::wstring(buffer, n) : wide(path);
+		}
+
+		// Copying or printing a JSON value recurses once per nesting level, so a file nested millions
+		// of levels deep (it only takes brackets) would overflow the stack: refuse anything deeper
+		// than any real metadata needs.
+		constexpr int MAX_DEPTH = 32;
+
+		bool shallowEnough(const std::string &text)
+		{
+			int depth = 0;
+			bool inString = false, escaped = false;
+			for (char c : text) {
+				if (inString) {
+					if (escaped)
+						escaped = false;
+					else if (c == '\\')
+						escaped = true;
+					else if (c == '"')
+						inString = false;
+				} else if (c == '"') {
+					inString = true;
+				} else if (c == '{' || c == '[') {
+					if (++depth > MAX_DEPTH)
+						return false;
+				} else if (c == '}' || c == ']') {
+					depth--;
+				}
+			}
+			return true;
+		}
+
+		std::optional<nlohmann::json> parseObject(const std::string &text)
+		{
+			if (!shallowEnough(text))
+				return std::nullopt;
+			auto parsed = nlohmann::json::parse(text, nullptr, false);
+			if (parsed.is_discarded() || !parsed.is_object())
+				return std::nullopt;
+			return parsed;
 		}
 
 		uint32_t crc32(const uint8_t *data, size_t size)
@@ -119,10 +160,7 @@ namespace ps::meta {
 			CloseHandle(file);
 			if (!found)
 				return std::nullopt;
-			auto parsed = nlohmann::json::parse(text, nullptr, false);
-			if (parsed.is_discarded() || !parsed.is_object())
-				return std::nullopt;
-			return parsed;
+			return parseObject(text);
 		}
 
 		void appendToRep(const char *replay, const std::map<std::string, nlohmann::json> &pending)
@@ -170,35 +208,61 @@ namespace ps::meta {
 			text << in.rdbuf();
 			if (text.str().size() > MAX_SIDECAR)
 				return std::nullopt;
-			auto parsed = nlohmann::json::parse(text.str(), nullptr, false);
-			if (parsed.is_discarded() || !parsed.is_object())
-				return std::nullopt;
-			return parsed;
+			return parseObject(text.str());
+		}
+
+		// Whether the game really wrote this replay: it exists and ends where its inputs end.
+		bool writtenByGame(const char *replay)
+		{
+			HANDLE file = CreateFileA(replay, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (file == INVALID_HANDLE_VALUE)
+				return false;
+			DWORD size = GetFileSize(file, nullptr);
+			DWORD end = gameDataEnd(file, size);
+			CloseHandle(file);
+			return end && end == size;
 		}
 
 		void writeMetadata(const char *replay)
 		{
 			std::map<std::string, nlohmann::json> pending;
+			std::set<std::string> owned;
 			{
 				// SaveRep can save from another thread while the game is crashing: never wait here.
 				std::unique_lock lock(g_mutex, std::try_to_lock);
 				if (!lock)
 					return;
 				pending = g_pending;
+				owned = g_owned;
 			}
-			if (pending.empty())
+			if (owned.empty() || !writtenByGame(replay)) {
+				if (!owned.empty())
+					log("meta: %s wasn't written as expected, no metadata saved", replay);
 				return;
-			if (g_storage == Storage::Rep)
-				return appendToRep(replay, pending);
+			}
+			if (g_storage == Storage::Rep) {
+				if (!pending.empty())
+					appendToRep(replay, pending);
+				return;
+			}
 
+			// A sidecar may already be there: other mods' keys, or one left behind by a deleted
+			// replay of the same name, whose data for our keys must not stick to this replay.
 			auto file = sidecarOf(wide(replay));
 			auto content = readSidecar(file);
 			if (!content) {
 				log("meta: %ls exists but isn't a JSON object, leaving it alone", file.c_str());
 				return;
 			}
+			for (auto &key : owned)
+				if (!pending.count(key))
+					content->erase(key);
 			for (auto &[key, value] : pending)
 				(*content)[key] = value;
+			if (content->empty()) {
+				DeleteFileW(file.c_str());  // nothing left (usually: there was no file)
+				return;
+			}
 			std::string text;
 			try {
 				text = content->dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
@@ -239,8 +303,12 @@ namespace ps::meta {
 		int __fastcall onWriteReplay(void *self, void *edx, const char *path)
 		{
 			int result = orig_writeReplay(self, edx, path);
-			if (path)
-				writeMetadata(path);
+			try {
+				if (path)
+					writeMetadata(path);
+			} catch (...) {
+				log("meta: saving the metadata of %s failed", path);
+			}
 			return result;
 		}
 
@@ -251,8 +319,14 @@ namespace ps::meta {
 				g_watched = nlohmann::json();
 			}
 			int result = orig_readReplay(self, edx, path);
-			if (path && (result & 0xFF))
-				readWatched(path);
+			try {
+				if (path && (result & 0xFF))
+					readWatched(path);
+			} catch (...) {
+				log("meta: reading the metadata of %s failed", path);
+				std::lock_guard lock(g_mutex);
+				g_watched = nlohmann::json();
+			}
 			return result;
 		}
 
@@ -291,21 +365,26 @@ namespace ps::meta {
 	void setPending(const std::string &key, nlohmann::json value)
 	{
 		std::lock_guard lock(g_mutex);
+		g_owned.insert(key);
 		g_pending[key] = std::move(value);
 	}
 
 	void clearPending(const std::string &key)
 	{
 		std::lock_guard lock(g_mutex);
+		g_owned.insert(key);
 		g_pending.erase(key);
 	}
 
 	std::optional<nlohmann::json> watched(const std::string &key)
 	{
 		std::lock_guard lock(g_mutex);
-		if (!g_watched.is_object() || !g_watched.contains(key))
+		if (!g_watched.is_object())
 			return std::nullopt;
-		return g_watched[key];
+		auto it = g_watched.find(key);
+		if (it == g_watched.end())
+			return std::nullopt;
+		return *it;
 	}
 
 	void install(Storage storage)

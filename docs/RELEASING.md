@@ -4,14 +4,17 @@
 
 ```
 build.bat
-powershell -File tools\package.ps1
+pwsh -File tools\package.ps1
 ```
 
-`dist\PaletteShare-<version>.zip` contains `PaletteShare\PaletteShare.dll`, `mod.json` and
-`PaletteShare.ini`, the same layout as other SokuLauncher mods, plus an empty
-`PaletteShare\palettes\<character>\` folder for each of the 20 characters.
+`dist\PaletteShare-<version>.zip` contains `PaletteShare\PaletteShare.dll`, `mod.json`,
+`PaletteShare.ini`, `README.md`, `LICENSE` (MIT) and `THIRD-PARTY-NOTICES.txt` (the MIT notices of
+SokuLib and nlohmann/json, which are compiled into the DLL), the same layout as other SokuLauncher
+mods, plus an empty `PaletteShare\palettes\<character>\` folder for each of the 20 characters.
 
 ## Before 1.0.0 (needs a person, not a script)
+
+0. **CHANGELOG**: replace "not released yet" with the release date.
 
 1. **Two-PC test over the internet**: two players, ideally one through Autopunch/a relay, both
    with a custom palette. Check that both see both palettes, Ctrl+P works, and a match against

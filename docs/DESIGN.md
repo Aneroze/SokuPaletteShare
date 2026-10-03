@@ -48,24 +48,31 @@ always side 0 (`mainMode` VSCLIENT = 4), the client side 1 (VSSERVER = 5).
   the existing handles. 591–826 textures take ~31 ms. Game state isn't touched, so it's
   rollback-safe.
 
-## Protocol (v1, `src/protocol.hpp`)
+## Protocol (v2, `src/protocol.hpp`)
 
 `[0xA7]["PSHR"][version][kind][payload]` on the game's UDP socket. The game handles types 1..14
 only and drops the rest (`0x41DB04`), so peers without the mod ignore ours. Other mods' ranges:
 SokuRoll 0x10–0x17, DesyncDetector 0x20–0x21, giuroll 0x6B–0x80, Soku2 0xD3. The game's receive
 buffer is 1024 bytes, so palettes go in chunks of ≤900 bytes (16-bit: 1 packet, 32-bit: 2).
 
-- **HELLO** `{role, isReply}`: the client sends it to the host every 500 ms (up to 40 times) when
-  a netplay session starts. The host replies and learns the client's address. Version mismatch →
-  no exchange. Spectator HELLOs are ignored in v1.
-- **PALETTE** `{charId, slot, hash, totalSize, offset, len, bytes}`: our current palette, resent
-  every 500 ms until acknowledged (max 60 times). The receiver reassembles (max 4 in flight),
-  checks the sizes and hash, caches it, and records "opponent's palette for charId = (slot, hash)".
+- **HELLO** `{role, isReply, minVersion, maxVersion, modVersion}`: the client sends it to the host
+  every 500 ms (up to 40 times) when a netplay session starts; the host replies. Both talk the
+  highest version in both ranges (peers that don't send a range speak just their header version),
+  re-checked on every HELLO; HELLO's own layout never changes. Only the game's opponent is
+  accepted: the client checks the host's address, the host an address that asked the game to play
+  (INIT_REQUEST with PLAY_REQU) in the last 60 s; spectators ask to spectate and aren't counted
+  (their HELLOs, role spectator, are ignored until spectator support).
+- **PALETTE** `{seq, charId, slot, hash, totalSize, offset, len, bytes}`: our current palette,
+  resent every 500 ms until acknowledged (max 60 times). `seq` numbers our offers, so a late or
+  reordered datagram never replaces a newer offer. The receiver reassembles (max 4 in flight),
+  checks charId < 256, slot < 8, the sizes and the hash, caches it (max 32 new palettes per
+  session), and keeps the newest offer per character (character-select previews) and per
+  character and slot (what the opponent loads with).
 - **ACK** `{hash}`.
 
 Offers are made from the character-select preview as the player browses, and again at load (a
-no-op if unchanged). A palette received after the opponent's character loaded is applied
-mid-match by the next battle render.
+no-op if unchanged). A palette received after the opponent's character loaded, or a newer one
+replacing it, is applied mid-match by the next battle render.
 
 ## Anti-abuse
 
@@ -101,8 +108,8 @@ mid-match by the next battle render.
   - mirror matches: verify the game's same-slot bump rule (an offline Okuu mirror gave P2 slot 1
     with no palette chosen; palette-picker bumps 0→1, otherwise →0) and warn live when it changes
     our fallback;
-  - fallback previews come from the original `.dat` palettes (not shady-loader overrides),
-    checked against a built-in table of vanilla palette hashes. Flag locally modified slots.
+  - fallback previews come from the original `.dat` palettes (not shady-loader overrides), read
+    straight from the game's archives (src/original.cpp). Locally modified slots are flagged.
     Honest limit: an opponent without the mod who replaced their own slot files sees their
     version.
 - [ ] **M3 spectators**: the host sends both palettes to modded spectators; spectators that relay
@@ -122,16 +129,15 @@ mid-match by the next battle render.
 
 ## Verified facts / tests
 
-All netplay tests used two local instances (host and guest, both with
-giuroll), driven by a small test harness, with InGameHostlist disabled so
-nothing was advertised publicly. Test palettes come from `tools/make_test_palettes.py`: "blue
+All netplay tests used two local game instances (host and guest, both with giuroll), driven by a
+small test harness, with InGameHostlist disabled so nothing was advertised publicly. Test palettes come from `tools/make_test_palettes.py`: "blue
 Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "green Reimu"
 `339d4b57…fa1d`.
 
 - **.rep trailer** (2026-09-30): the game reads the input count at offset 0x77 and stops at
   `0x7B + count*2`. Trailing data is ignored (ReplayDnD playback identical over a full match; the
   menu lists and loads it).
-- **Replay palettes** (2026-10-03): netplay host (Copy, debug-forced blue Reimu on side 0 and the
+- **Replay palettes** (2026-10-03): netplay host (debug-forced blue Reimu on side 0 and the
   32-bit green Reimu on side 1) vs a guest without PaletteShare; closing the window made SaveRep
   save the replay. Sidecar mode: .rep byte-identical to the game's (ends at the inputs), sidecar
   with both palettes (513 B / 1025 B); with an extra foreign key added to the sidecar, playback

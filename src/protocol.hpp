@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 #include "palette.hpp"
 
@@ -20,12 +21,16 @@
 namespace ps::proto {
 	constexpr uint8_t PACKET_TYPE = 0xA7;
 	constexpr char MAGIC[4] = {'P', 'S', 'H', 'R'};
-	constexpr uint8_t VERSION = 2;  // 2: palette chunks carry an offer sequence number
+	constexpr uint8_t VERSION = 2;      // what we write; 2: palette chunks carry an offer sequence number
+	constexpr uint8_t MIN_VERSION = 2;  // the oldest version we can still talk (HELLO's min..max range)
 	constexpr size_t HEADER_SIZE = 7;
 	constexpr size_t MAX_CHUNK = 900;
+	constexpr uint16_t MAX_CHARACTER_ID = 256;  // the game's are 0-20; room for modded characters
 
 	enum Kind : uint8_t {
-		KIND_HELLO = 1,   // u8 role (0 = player, 1 = spectator), u8 isReply
+		KIND_HELLO = 1,   // u8 role (0 = player, 1 = spectator), u8 isReply, then (since 1.0.0) u8 min
+		                  // version, u8 max version, u8 length + the mod's version string. Both sides
+		                  // talk the highest version in both ranges; HELLO's own layout never changes.
 		KIND_PALETTE = 2, // u32 seq, u16 charId, u8 slot, u8[16] hash, u16 totalSize, u16 offset, u16 len, bytes
 		KIND_ACK = 3,     // u8[16] hash
 	};
@@ -36,9 +41,12 @@ namespace ps::proto {
 	};
 
 	struct Hello {
-		uint8_t version;
+		uint8_t version;     // the header's
 		Role role;
 		bool isReply;
+		uint8_t minVersion;  // = version for peers that don't send a range
+		uint8_t maxVersion;
+		std::string modVersion;  // empty when not sent
 	};
 
 	struct PaletteChunk {
