@@ -2,6 +2,7 @@
 #include "log.hpp"
 #include "net.hpp"
 #include "picker.hpp"
+#include "replay.hpp"
 #include <windows.h>
 #include <SokuLib.hpp>
 #include <mutex>
@@ -72,29 +73,34 @@ namespace ps {
 			return local < 0 || side == local;
 		}
 
+		bool watchingReplay() { return SokuLib::subMode == SokuLib::BATTLE_SUBMODE_REPLAY; }
+
 		int remoteSide()
 		{
 			int local = net::localSide();
 			return local < 0 ? -1 : 1 - local;
 		}
 
-		// The palette to offer as "custom" for a side: debug force first, then the opponent's: the one
-		// they offered for this slot, or (character select previews, anySlot) the one they show now.
+		// The palette to offer as "custom" for a side: the one the replay being watched recorded, else
+		// the debug force, else the opponent's: the one they offered for this slot, or (character
+		// select previews, anySlot) the one they show now.
 		std::optional<Palette> customFor(int side, int charId, int slot, const Palette &reference, bool anySlot = false)
 		{
 			std::optional<PaletteHash> hash;
-			if (config.forcePalette[side])
+			std::optional<Palette> palette;
+			if (watchingReplay())
+				palette = replay::paletteFor(side, charId, slot);
+			else if (config.forcePalette[side])
 				hash = config.forcePalette[side];
 			else if (side == remoteSide())
 				hash = anySlot ? net::remoteShown(charId) : net::remotePalette(charId, slot);
-			if (!hash)
-				return std::nullopt;
-
-			auto palette = cache.load(*hash);
-			if (!palette) {
-				log("  side=%d: palette %s missing from the cache", side, hash->hex().c_str());
-				return std::nullopt;
+			if (hash) {
+				palette = cache.load(*hash);
+				if (!palette)
+					log("  side=%d: palette %s missing from the cache", side, hash->hex().c_str());
 			}
+			if (!palette)
+				return std::nullopt;
 			auto checked = lockTransparency(*palette, reference);
 			if (hashPalette(checked) == hashPalette(reference))
 				return std::nullopt;  // the opponent uses the same palette we'd show anyway
@@ -172,16 +178,20 @@ namespace ps {
 			side = Side{};
 			side.charId = player->characterIndex;
 			side.slot = player->paletteId;
+			std::optional<Palette> picked;  // the custom palette chosen here, recorded for replays
 			if (pickedHere(index)) {
 				if (auto mine = picker::customFor(index, side.charId)) {
 					if (looksLikeSide0(index, side.charId, *mine)) {
 						log("load side=%d: our custom palette is the same as side 0's (mirror), using game slot %d", index, side.slot);
 					} else {
 						writeGamePalette(*mine, palette);
+						picked = std::move(mine);
 						log("load side=%d: our picked custom palette (game slot %d is the fallback)", index, side.slot);
 					}
 				}
 			}
+			if (!watchingReplay())
+				replay::record(index, side.charId, side.slot, picked);
 			side.vanilla = readGamePalette(palette);
 			if (!side.vanilla.valid()) {
 				log("load side=%d char=%d slot=%d: palette unreadable (bpp=%d)", index, side.charId, side.slot, (int)palette.bitsPerPixel);
@@ -202,6 +212,8 @@ namespace ps {
 				log("  side=%d: custom palette is the same as side 0's (mirror), showing game slot %d", index, side.slot);
 				side.custom.reset();
 			}
+			if (side.custom && !watchingReplay())
+				replay::record(index, side.charId, side.slot, side.custom);
 			if (side.custom && g_showOpponent) {
 				writeGamePalette(*side.custom, palette);
 				side.showingCustom = true;
@@ -286,6 +298,8 @@ namespace ps {
 			if (side.custom || side.charId < 0 || !side.vanilla.valid() || side.textures.empty())
 				return;
 			side.custom = customFor(index, side.charId, side.slot, side.vanilla);
+			if (side.custom)
+				replay::record(index, side.charId, side.slot, side.custom);
 			if (side.custom && g_showOpponent) {
 				log("late palette for side=%d, applying", index);
 				showSide(index, true);

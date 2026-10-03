@@ -7,6 +7,7 @@
 #include "menu.hpp"
 #include "net.hpp"
 #include "picker.hpp"
+#include "replaymeta.hpp"
 
 // th123.exe 1.10a
 static const BYTE TARGET_HASH[16] = {0xdf, 0x35, 0xd1, 0xfb, 0xc7, 0xb5, 0x83, 0x31, 0x7a, 0xda, 0xbe, 0x8c, 0xd9, 0xf5, 0x3b, 0x2e};
@@ -48,6 +49,10 @@ static void loadConfig(const std::filesystem::path &ini)
 {
 	ps::config.showOpponentPalettes = iniInt(ini, L"Display", L"ShowOpponentPalettes", 1) != 0;
 	ps::config.showOriginalPalettes = iniInt(ini, L"Picker", L"ShowOriginalPalettes", 0) != 0;
+	auto storage = iniString(ini, L"Replay", L"Storage");
+	ps::config.replayMetaInRep = _stricmp(storage.c_str(), "rep") == 0;
+	if (!storage.empty() && !ps::config.replayMetaInRep && _stricmp(storage.c_str(), "sidecar"))
+		ps::log("config: [Replay] Storage=%s is neither sidecar nor rep, using sidecar", storage.c_str());
 	ps::config.toggleModifier = iniInt(ini, L"Hotkey", L"Modifier", VK_CONTROL);
 	ps::config.toggleKey = iniInt(ini, L"Hotkey", L"Key", 'P');
 	ps::config.hotkeyIgnoresFocus = iniInt(ini, L"Debug", L"HotkeyIgnoresFocus", 0) != 0;
@@ -89,6 +94,7 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 	ps::net::install();
 	ps::picker::install();
 	ps::menu::install();
+	ps::meta::install(ps::config.replayMetaInRep ? ps::meta::Storage::Rep : ps::meta::Storage::Sidecar);
 	return true;
 }
 

@@ -49,6 +49,10 @@
 - Game-format `.pal` files with a few extra bytes at the end (515-byte shady-loader palettes) are
   read.
 - The previous run's log is kept as `PaletteShare.prev.log`.
+- Replays: saving a replay keeps both sides' custom palettes; watching it with PaletteShare shows
+  them. Stored as per-replay metadata (JSON, one key per mod) in a `<replay>.meta.json` sidecar by
+  default, or with `[Replay] Storage=rep` appended to the `.rep` after the game's data (the game
+  ignores it). Watching reads both.
 - Character select shows the opponent's palette as soon as it arrives. Before, their preview was
   only rebuilt when their palette wheel moved, usually just before their palette arrived (and never
   for a custom palette on the slot they were already on).

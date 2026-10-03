@@ -107,8 +107,17 @@ mid-match by the next battle render.
     version.
 - [ ] **M3 spectators**: the host sends both palettes to modded spectators; spectators that relay
   to other spectators (REDIRECT / CHAIN packets) pass them on from their cache.
-- [ ] **M4 replays**: after the game saves a `.rep`, append a trailer (`SOKUPAL\0`, version,
-  per-side palettes, CRC). On playback, read it and apply.
+- [x] **M4 replays**: per-replay metadata (src/replaymeta.cpp, meant to become its own mod): a JSON
+  object with one key per mod, saved after the game's writer (0x42B2D0) returns, either to a
+  `<name>.meta.json` sidecar (default; merged with the keys already there, written via a temp file)
+  or appended to the .rep after the game's data (`[Replay] Storage=rep`; compact JSON + footer: u32
+  size, CRC-32, `SOKUMETA`). Read back after readReplay (0x42EAC0) from both places. Both functions
+  are hooked at their entry (SEH prologue moved to a trampoline), which also covers SaveRep (calls
+  the game's save, 0x43EBE0) and ReplayDnD (calls readReplay directly; the sidecar is found through
+  the real path of the opened replay, since ReplayDnD passes an ANSI stand-in). src/replay.cpp stores
+  `"PaletteShare": {"version": 1, "palettes": {"p1"/"p2": {character, slot, base64 .pal}}}`, applied
+  at character load when the character and slot match. (The design came out of a discussion with
+  Aristocrat: an extensible key schema that mods without knowledge of each other can share.)
 - [ ] **M5 polish**: Soku2 / CharacterEngine characters; an on-screen notice for the hotkey.
 
 ## Verified facts / tests
@@ -122,6 +131,13 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
 - **.rep trailer** (2026-09-30): the game reads the input count at offset 0x77 and stops at
   `0x7B + count*2`. Trailing data is ignored (ReplayDnD playback identical over a full match; the
   menu lists and loads it).
+- **Replay palettes** (2026-10-03): netplay host (Copy, debug-forced blue Reimu on side 0 and the
+  32-bit green Reimu on side 1) vs a guest without PaletteShare; closing the window made SaveRep
+  save the replay. Sidecar mode: .rep byte-identical to the game's (ends at the inputs), sidecar
+  with both palettes (513 B / 1025 B); with an extra foreign key added to the sidecar, playback
+  through ReplayDnD (command line, force removed) showed both recorded palettes. Rep mode: +2198
+  bytes after the game's data, CRC valid, no sidecar; played back with the setting on sidecar:
+  read from the .rep, both palettes shown (screenshot).
 - **Exchange** (2026-10-01): host = blue Reimu from a shady-loader package, guest = inverted Sanae
   from palette-picker 0.2b. Both screens show both custom palettes. With empty caches the bytes
   were transferred, reassembled and hash-checked.

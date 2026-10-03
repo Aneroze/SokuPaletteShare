@@ -90,6 +90,8 @@ The picker remembers your last choice per character.
   Use it if an opponent's palette is hard to look at. Your choice stays until you toggle again or
   restart the game. The key is configurable under `[Hotkey]`.
 - `[Display] ShowOpponentPalettes=0` starts with opponents' custom palettes hidden.
+- `[Replay] Storage=rep` keeps replay palettes inside the `.rep` instead of a `.meta.json` file next
+  to it (see Replays).
 - `[Picker] ShowOriginalPalettes=1` lists the original colors of slots a palette mod replaces
   ("Original 03"), so you can still pick them.
 - `[Debug] Log=1` writes `PaletteShare.log` next to the DLL; the previous run's log is kept as
@@ -104,10 +106,26 @@ The picker remembers your last choice per character.
   use.
 - Players without PaletteShare ignore its packets (the game drops packet types it doesn't know).
 
+## Replays
+
+When a replay is saved (by the game, or by SaveRep), PaletteShare keeps the custom palettes both
+sides were shown with, about 1 KB each (2 KB for a 32-bit one), nothing if neither side had one.
+Watching the replay with PaletteShare (from the replay menu or ReplayDnD) shows them again, with
+the same transparency check as online and the Ctrl+P toggle. Players without PaletteShare see the
+normal palettes.
+
+Where they're kept is set by `[Replay] Storage`:
+- `sidecar` (default): in `<replay name>.meta.json` next to the `.rep`, which stays exactly as the
+  game wrote it. To share a replay with its palettes, share both files.
+- `rep`: appended to the `.rep` itself, after the game's data (the game ignores it), so the one file
+  carries them.
+
+Watching always looks in both places. The `.meta.json` file is plain JSON with one key per mod
+(PaletteShare uses `"PaletteShare"`), so other mods can keep their own data in the same file.
+
 ## Current limits (planned for 1.1)
 
 - **Spectators** see the normal palettes.
-- **Replays** show the normal palettes.
 - The opponent's custom palette appears in the character-select preview once it has arrived
   (usually a fraction of a second after they scroll to it).
 
