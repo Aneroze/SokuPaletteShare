@@ -550,11 +550,39 @@ namespace ps::picker {
 			}
 		}
 
+		void rebuildPreview(SokuLib::Select *sel, int player, int charId)
+		{
+			auto rebuild = reinterpret_cast<void (__fastcall *)(SokuLib::Select *, void *, int, int, int, bool)>(SET_PALETTE_SELECT);
+			rebuild(sel, nullptr, player, charId, wheelOf(sel, player).pos, false);
+		}
+
 		void refreshPreview(SokuLib::Select *sel, int player, Pick &pick)
 		{
 			pick.previewDirty = false;
-			auto rebuild = reinterpret_cast<void (__fastcall *)(SokuLib::Select *, void *, int, int, int, bool)>(SET_PALETTE_SELECT);
-			rebuild(sel, nullptr, player, pick.charId, wheelOf(sel, player).pos, false);
+			rebuildPreview(sel, player, pick.charId);
+		}
+
+		// The game rebuilds the opponent's preview when their wheel moves (their inputs), but their
+		// palette comes on our own channel, usually a moment later, or without any wheel move at all
+		// (a custom palette on the slot they're already on). So rebuild it when a new one arrives;
+		// the preview hook then shows it. Game thread, without g_mutex (the rebuild calls back in).
+		unsigned g_seenGeneration = 0;
+
+		void refreshOpponentPreview(SokuLib::Select *sel)
+		{
+			unsigned generation = net::remoteGeneration();
+			if (generation == g_seenGeneration)
+				return;
+			g_seenGeneration = generation;
+			int local = net::localSide();
+			if (!online() || local < 0)
+				return;
+			int side = 1 - local;
+			int charId = characterOf(sel, side);
+			if (charId < 0)
+				return;
+			log("picker: opponent palette arrived, rebuilding side=%d preview (char=%d slot=%d)", side, charId, wheelOf(sel, side).pos);
+			rebuildPreview(sel, side, charId);
 		}
 
 		template<int N>
@@ -564,6 +592,7 @@ namespace ps::picker {
 			static int __fastcall hook(void *self)
 			{
 				auto sel = static_cast<SokuLib::Select *>(self);
+				refreshOpponentPreview(sel);
 				if (!g_disabled) {
 					for (int side = 0; side < 2; side++) {
 						std::unique_lock lock(g_mutex);

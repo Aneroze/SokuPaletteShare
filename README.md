@@ -103,7 +103,8 @@ The picker remembers your last choice per character.
 
 - **Spectators** see the normal palettes.
 - **Replays** show the normal palettes.
-- The opponent's custom palette appears in the character-select preview only once it has arrived.
+- The opponent's custom palette appears in the character-select preview once it has arrived
+  (usually a fraction of a second after they scroll to it).
 
 ## Install
 

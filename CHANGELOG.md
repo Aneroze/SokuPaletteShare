@@ -39,6 +39,9 @@
 - Palette mods (shady-loader packages, data files): slots they replace are marked "(mod)" with
   "Mod" / "Original NN" previews instead of "same palette for everyone", and each one also gets a
   "Mod NN" entry with its own fallback (`[*mod NN]` in palettes.ini), like a custom palette.
+- Character select shows the opponent's palette as soon as it arrives. Before, their preview was
+  only rebuilt when their palette wheel moved, usually just before their palette arrived (and never
+  for a custom palette on the slot they were already on).
 
 ## 0.9.0 (2026-10-01)
 
