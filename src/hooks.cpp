@@ -311,11 +311,13 @@ namespace ps {
 			log("load side=%d char=%d slot=%d bpp=%d hash=%s", index, side.charId, side.slot, (int)side.vanilla.bpp, hash.hex().c_str());
 
 			if (index == net::localSide())
-				net::offerLocal(side.charId, side.slot, side.vanilla, hash);
+				net::offerLocal(side.charId, side.slot, side.vanilla, hash, true);
 
 			side.custom = customFor(index, side.charId, side.slot, side.vanilla);
 			if (!side.custom && index == remoteSide())
-				log("  side=%d: no palette from the opponent for char=%d slot=%d (yet)", index, side.charId, side.slot);
+				log(net::remotePalette(side.charId, side.slot) ? "  side=%d: the opponent's palette for char=%d slot=%d looks like ours" :
+				                                                   "  side=%d: no palette from the opponent for char=%d slot=%d (yet)",
+					index, side.charId, side.slot);
 			if (side.custom && looksLikeSide0(index, side.charId, *side.custom)) {
 				log("  side=%d: custom palette is the same as side 0's (mirror), showing game slot %d", index, side.slot);
 				side.custom.reset();

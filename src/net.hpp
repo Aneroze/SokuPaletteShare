@@ -20,7 +20,8 @@ namespace ps::net {
 	int localSide();
 
 	// Main thread: the palette the local player's character is shown with.
-	void offerLocal(int charId, int slot, const Palette &palette, const PaletteHash &hash);
+	// again: send it once more even if it's the current offer and was acknowledged (at load).
+	void offerLocal(int charId, int slot, const Palette &palette, const PaletteHash &hash, bool again = false);
 
 	// The palette the opponent offered for this character and slot, if received (it is in the
 	// cache by then).

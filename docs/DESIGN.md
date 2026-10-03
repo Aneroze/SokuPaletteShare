@@ -68,7 +68,9 @@ buffer is 1024 bytes, so palettes go in chunks of ≤900 bytes (16-bit: 1 packet
   checks charId < 256, slot < 8, the sizes and the hash, caches it (max 32 new palettes per
   session), and keeps the newest offer per character (character-select previews) and per
   character and slot (what the opponent loads with).
-- **ACK** `{hash}`.
+- **ACK** `{hash, seq}`: confirms that one offer. Offers in a row often share a palette (the
+  wheel stepping to the fallback slot re-offers it per slot), so an ACK by hash alone could confirm
+  the final offer before it was sent. The local offer is also sent once more at character load.
 
 Offers are made from the character-select preview as the player browses, and again at load (a
 no-op if unchanged). A palette received after the opponent's character loaded, or a newer one

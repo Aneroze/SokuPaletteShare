@@ -85,10 +85,11 @@ namespace ps::proto {
 		return w.take();
 	}
 
-	std::vector<uint8_t> makeAck(const PaletteHash &hash)
+	std::vector<uint8_t> makeAck(const PaletteHash &hash, uint32_t seq)
 	{
 		Writer w(KIND_ACK);
 		w.bytes(hash.bytes.data(), hash.bytes.size());
+		w.u32(seq);
 		return w.take();
 	}
 
@@ -161,15 +162,17 @@ namespace ps::proto {
 		return c;
 	}
 
-	std::optional<PaletteHash> parseAck(const uint8_t *data, size_t size)
+	std::optional<Ack> parseAck(const uint8_t *data, size_t size)
 	{
 		if (kindOf(data, size) != KIND_ACK)
 			return std::nullopt;
 
 		Reader r(data, size);
-		PaletteHash h;
-		if (!r.bytes(h.bytes.data(), h.bytes.size()))
+		Ack ack{{}, 0};
+		if (!r.bytes(ack.hash.bytes.data(), ack.hash.bytes.size()))
 			return std::nullopt;
-		return h;
+		r.u32(ack.seq);  // absent from older builds: stays 0
+		return ack;
 	}
+
 }

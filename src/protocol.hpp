@@ -32,7 +32,8 @@ namespace ps::proto {
 		                  // version, u8 max version, u8 length + the mod's version string. Both sides
 		                  // talk the highest version in both ranges; HELLO's own layout never changes.
 		KIND_PALETTE = 2, // u32 seq, u16 charId, u8 slot, u8[16] hash, u16 totalSize, u16 offset, u16 len, bytes
-		KIND_ACK = 3,     // u8[16] hash
+		KIND_ACK = 3,     // u8[16] hash, u32 seq: which offer this confirms (offers in a row often share
+		                  // a palette while the wheel steps, so the hash alone could confirm the wrong one)
 	};
 
 	enum Role : uint8_t {
@@ -63,13 +64,17 @@ namespace ps::proto {
 	bool isOurs(const uint8_t *data, size_t size);
 
 	std::vector<uint8_t> makeHello(Role role, bool isReply);
-	std::vector<uint8_t> makeAck(const PaletteHash &hash);
+	struct Ack {
+		PaletteHash hash;
+		uint32_t seq;  // 0 when the sender didn't say (never matches an offer)
+	};
+	std::vector<uint8_t> makeAck(const PaletteHash &hash, uint32_t seq);
 	// Splits the serialized palette into chunk packets.
 	std::vector<std::vector<uint8_t>> makePalette(uint32_t seq, uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized);
 
 	std::optional<Hello> parseHello(const uint8_t *data, size_t size);
 	std::optional<PaletteChunk> parsePalette(const uint8_t *data, size_t size);
-	std::optional<PaletteHash> parseAck(const uint8_t *data, size_t size);
+	std::optional<Ack> parseAck(const uint8_t *data, size_t size);
 	std::optional<uint8_t> kindOf(const uint8_t *data, size_t size);
 	std::optional<uint8_t> versionOf(const uint8_t *data, size_t size);
 }

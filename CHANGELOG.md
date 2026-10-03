@@ -7,6 +7,10 @@
   unexpected change turns just that feature off, logged); the select screen object is checked
   before use; Soku2 and other added characters are left alone; network sends and cache writes
   happen outside the network lock (cache writes on our own thread).
+- Fixed: online, your chosen palette could be marked as received before it was ever sent (an
+  acknowledgement for an earlier offer with the same palette, sent while the wheel stepped to its
+  slot, was taken for the final one), so the opponent loaded your fallback slot or a palette you had
+  scrolled past. Acknowledgements now name the offer; your palette is also sent once more at load.
 - Netplay: the per-select limit counts only real custom palettes (up to 256), the handshake retries
   at each character select, and a stranger can't pass as the opponent once a match has started.
 - A palette arriving late is applied over a few frames instead of in one ~30 ms hitch.

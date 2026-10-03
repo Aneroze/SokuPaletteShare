@@ -289,7 +289,7 @@ namespace ps::net {
 				// Already have it: just acknowledge, so the sender stops resending.
 				if (cache.load(chunk.hash)) {
 					remember(chunk.seq, chunk.charId, chunk.slot, chunk.hash, false);
-					sendTo(proto::makeAck(chunk.hash), from);
+					sendTo(proto::makeAck(chunk.hash, chunk.seq), from);
 					return;
 				}
 				if (g_pending.size() >= MAX_PENDING) {
@@ -340,16 +340,18 @@ namespace ps::net {
 			cache.keep(*palette, chunk.hash);
 			g_toStore.emplace_back(*palette, chunk.hash);
 			remember(seq, charId, slot, chunk.hash, true);
-			sendTo(proto::makeAck(chunk.hash), from);
+			sendTo(proto::makeAck(chunk.hash, seq), from);
 		}
 
-		void onAck(const PaletteHash &hash, const sockaddr_in &from)
+		void onAck(const proto::Ack &ack, const sockaddr_in &from)
 		{
 			if (!g_peerKnown || !sameAddr(from, g_peer))
 				return;
-			if (g_offer && g_offer->hash == hash && !g_offer->acked) {
+			// Only the offer it answers: one for an earlier offer with the same palette (the wheel
+			// stepping towards its slot) mustn't stop the current one from being sent.
+			if (g_offer && g_offer->seq == ack.seq && g_offer->hash == ack.hash && !g_offer->acked) {
 				g_offer->acked = true;
-				log("net: opponent has our palette %s", hash.hex().c_str());
+				log("net: opponent has our offer #%u", ack.seq);
 			}
 		}
 
@@ -475,13 +477,19 @@ namespace ps::net {
 		}
 	}
 
-	void offerLocal(int charId, int slot, const Palette &palette, const PaletteHash &hash)
+	void offerLocal(int charId, int slot, const Palette &palette, const PaletteHash &hash, bool again)
 	{
 		std::lock_guard lock(g_mutex);
 		if (localSide() < 0)
 			return;
-		if (g_offer && g_offer->charId == charId && g_offer->slot == slot && g_offer->hash == hash)
+		if (g_offer && g_offer->charId == charId && g_offer->slot == slot && g_offer->hash == hash) {
+			if (again && g_offer->acked) {  // the character loads with it: make sure the opponent has it
+				g_offer->acked = false;
+				g_offer->sends = 0;
+				g_offer->nextSend = 0;
+			}
 			return;
+		}
 
 		uint32_t seq = g_nextSeq++;
 		Offer offer{seq, charId, slot, hash, proto::makePalette(seq, static_cast<uint16_t>(charId), static_cast<uint8_t>(slot), hash, palette.serialize())};

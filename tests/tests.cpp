@@ -199,8 +199,12 @@ namespace {
 		CHECK(!proto::parsePalette(badChar.data(), badChar.size()));  // charId past 255
 		auto badSlot = proto::makePalette(1, 3, 9, hashPalette(p), p.serialize())[0];
 		CHECK(!proto::parsePalette(badSlot.data(), badSlot.size()));  // slot past 7
-		auto ack = proto::makeAck(hashPalette(p));
-		CHECK(proto::parseAck(ack.data(), ack.size()) && *proto::parseAck(ack.data(), ack.size()) == hashPalette(p));
+		auto ack = proto::makeAck(hashPalette(p), 77);
+		auto parsedAck = proto::parseAck(ack.data(), ack.size());
+		CHECK(parsedAck && parsedAck->hash == hashPalette(p) && parsedAck->seq == 77);
+		std::vector<uint8_t> oldAck(ack.begin(), ack.end() - 4);  // without the offer number
+		auto parsedOldAck = proto::parseAck(oldAck.data(), oldAck.size());
+		CHECK(parsedOldAck && parsedOldAck->seq == 0);
 		std::vector<uint8_t> notOurs = {0x05, 'P', 'S', 'H', 'R', 2, 1};
 		CHECK(!proto::isOurs(notOurs.data(), notOurs.size()));
 	}
@@ -288,7 +292,7 @@ namespace {
 	{
 		Rng rng{0x5EED1234};
 		auto p16 = testPalette(16, 1), p32 = testPalette(32, 2);
-		std::vector<std::vector<uint8_t>> packets = {proto::makeHello(proto::ROLE_PLAYER, false), proto::makeAck(hashPalette(p16))};
+		std::vector<std::vector<uint8_t>> packets = {proto::makeHello(proto::ROLE_PLAYER, false), proto::makeAck(hashPalette(p16), 5)};
 		for (auto &chunk : proto::makePalette(9, 3, 1, hashPalette(p32), p32.serialize()))
 			packets.push_back(chunk);
 		int accepted = 0;
