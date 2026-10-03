@@ -12,6 +12,10 @@ namespace ps {
 	{
 		if (!enabled || g_file)
 			return;
+		// Keep the previous run's log: players often restart the game before sending it.
+		auto previous = file;
+		previous.replace_extension(L".prev.log");
+		MoveFileExW(file.c_str(), previous.c_str(), MOVEFILE_REPLACE_EXISTING);
 		g_file = _wfopen(file.c_str(), L"w");
 	}
 
