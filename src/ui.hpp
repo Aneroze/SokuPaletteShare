@@ -3,6 +3,7 @@
 #include <SokuLib.hpp>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include "palette.hpp"
 
@@ -55,6 +56,9 @@ namespace ps::ui {
 	// Whether this game shows a slot differently from the game's original colors (a shady-loader
 	// package or data file replaces it). Re-checked every 2 s; render thread.
 	bool slotDiffersFromOriginal(int charId, int slot);
+	// The same check, with this game's palette for the slot when it differs (nullopt when it
+	// doesn't, or when the archives can't be read).
+	std::optional<Palette> moddedSlot(int charId, int slot);
 
 	// What to press for a game button, as bound in that keymap: the keyboard key's name ("Z", "A")
 	// or the gamepad button ("Pad3"). Hints use this rather than the game's button letters, since

@@ -34,32 +34,39 @@ namespace ps::ui {
 		}
 	}
 
-	bool slotDiffersFromOriginal(int charId, int slot)
+	std::optional<Palette> moddedSlot(int charId, int slot)
 	{
 		// Re-checked every couple of seconds rather than once, in case a mod changes its palettes
 		// while the game runs.
-		struct Check { bool differs; DWORD at; };
+		struct Check { std::optional<Palette> modded; DWORD at; };
 		static std::map<std::pair<int, int>, Check> cache;
 		constexpr DWORD RECHECK_MS = 2000;
 		DWORD now = GetTickCount();
 		auto it = cache.find({charId, slot});
 		if (it != cache.end() && now - it->second.at < RECHECK_MS)
-			return it->second.differs;
+			return it->second.modded;
 		const char *name = internalName(charId);
 		auto orig = original::palette(name, slot);
-		bool differs = false;
+		std::optional<Palette> modded;
 		if (orig && name && *name) {
 			auto &current = SokuLib::Palette::currentPalette;
 			auto saved = readGamePalette(current);
 			loadGameSlot(name, slot);
-			differs = !sameColors(readGamePalette(current), *orig);
+			auto loaded = readGamePalette(current);
+			if (loaded.valid() && !sameColors(loaded, *orig))
+				modded = std::move(loaded);
 			if (saved.valid())
 				writeGamePalette(saved, current);
 		}
-		if (it == cache.end() || it->second.differs != differs)
-			log("ui: %s slot %d %s the original", name ? name : "?", slot, differs ? "differs from" : "matches");
-		cache[{charId, slot}] = {differs, now};
-		return differs;
+		if (it == cache.end() || it->second.modded.has_value() != modded.has_value())
+			log("ui: %s slot %d %s the original", name ? name : "?", slot, modded ? "differs from" : "matches");
+		cache[{charId, slot}] = {modded, now};
+		return modded;
+	}
+
+	bool slotDiffersFromOriginal(int charId, int slot)
+	{
+		return moddedSlot(charId, slot).has_value();
 	}
 
 	Text::Text(int height) : _height(height) {}

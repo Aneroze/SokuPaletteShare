@@ -6,6 +6,7 @@
 #include "ui.hpp"
 #include <windows.h>
 #include <SokuLib.hpp>
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -35,7 +36,7 @@ namespace ps::picker {
 			bool active = false;     // in the palette step and driven by us
 			int charId = -1;
 			CharacterLibrary lib;    // snapshot taken when the palette step started
-			int index = 0;           // 0..7 vanilla slots, 8.. library palettes
+			int index = 0;           // 0..7 vanilla slots, 8.. library palettes ("Mod NN" first)
 			bool previewDirty = false;
 			Steer steer = Steer::Idle;
 			int wheelAtPress = -1;
@@ -74,7 +75,17 @@ namespace ps::picker {
 			{
 				if (i < 8)
 					return i == takenSlot;
-				return takenPalette && sameColors(lib.palettes[i - 8].palette, *takenPalette);
+				auto &p = lib.palettes[i - 8];
+				// A "Mod NN" entry looks exactly like slot NN does in this game.
+				return (p.modSlot >= 0 && p.modSlot == takenSlot) || (takenPalette && sameColors(p.palette, *takenPalette));
+			}
+			// The "Mod NN" entry of a slot a palette mod replaces, or -1.
+			int modEntry(int slot) const
+			{
+				for (size_t i = 0; i < lib.palettes.size(); i++)
+					if (lib.palettes[i].modSlot == slot)
+						return 8 + static_cast<int>(i);
+				return -1;
 			}
 			// The nearest entry in that direction the other side doesn't use (the game's skip).
 			int step(int from, int direction) const
@@ -171,6 +182,7 @@ namespace ps::picker {
 			pick.active = true;
 			pick.charId = charId;
 			pick.lib = library(charId);
+			addModdedSlots(pick.lib);
 			pick.index = wheel;
 			int who = memoryOf(side);
 			if (!pick.lib.lastSelected[who].empty()) {
@@ -181,7 +193,9 @@ namespace ps::picker {
 				pick.index = pick.lib.lastSlot[who];
 			}
 			pick.previewDirty = true;
-			log("picker: palette step for side=%d char=%d, %d custom palette(s), starting at %d", side, charId, (int)pick.lib.palettes.size(), pick.index);
+			log("picker: palette step for side=%d char=%d, %d custom palette(s) (%d from palette mods), starting at %d", side, charId,
+				(int)pick.lib.palettes.size(), (int)std::count_if(pick.lib.palettes.begin(), pick.lib.palettes.end(), [](auto &p) { return p.modSlot >= 0; }),
+				pick.index);
 		}
 
 		// Mirror match: what the other side uses, as the game decides it (0x4204A0: only once the
@@ -296,7 +310,18 @@ namespace ps::picker {
 				}
 				if (in.a == 1)
 					pick.pendingConfirm = true;
-				// D edits the highlighted palette's fallback (it replaces the game's random palette).
+				// D edits the highlighted palette's fallback (it replaces the game's random palette). On a
+				// slot a palette mod replaces, it moves to that slot's "Mod NN" entry first.
+				if (in.d == 1 && !pick.custom()) {
+					int entry = pick.modEntry(pick.index);
+					if (entry >= 0 && !pick.taken(entry)) {
+						pick.index = entry;
+						pick.previewDirty = true;
+						pick.presses = 0;
+						pick.unreachable = -1;
+						pick.confirmed = false;
+					}
+				}
 				if (in.d == 1 && pick.custom()) {
 					pick.editing = true;
 					pick.editSlot = pick.custom()->fallback;
@@ -345,7 +370,7 @@ namespace ps::picker {
 				auto custom = pick.custom();
 				pick.confirmedCustom = custom ? std::optional<Palette>(custom->palette) : std::nullopt;
 				rememberSelection(charId, memoryOf(side), custom ? custom->name : L"", custom ? -1 : pick.index);
-				log("picker: confirmed side=%d char=%d %ls, game slot %d", side, charId, custom ? custom->name.c_str() : L"(vanilla)", wheel);
+				log("picker: confirmed side=%d char=%d %ls, game slot %d", side, charId, custom ? displayName(*custom).c_str() : L"(vanilla)", wheel);
 			}
 
 			in.verticalAxis = emitV;
@@ -422,7 +447,9 @@ namespace ps::picker {
 		std::string entryName(const Pick &pick, int index)
 		{
 			index = (index % pick.count() + pick.count()) % pick.count();
-			return index < 8 ? ui::slotName(index) : ui::narrow(pick.lib.palettes[index - 8].name);
+			if (index < 8)
+				return ui::slotName(index) + (pick.modEntry(index) >= 0 ? " (mod)" : "");
+			return ui::narrow(displayName(pick.lib.palettes[index - 8]));
 		}
 
 		// Panel layout (in the 640x480 game frame): right of the game's own palette preview and deck
@@ -459,12 +486,21 @@ namespace ps::picker {
 
 			// Previews
 			auto custom = pick.custom();
+			std::optional<Palette> moddedSlot;
+			if (!custom && pick.modEntry(pick.index) >= 0)
+				moddedSlot = pick.lib.palettes[pick.modEntry(pick.index) - 8].palette;
 			if (custom) {
 				int slot = pick.target();
 				g_text.draw("Custom", x + CUSTOM_X - 20, y + 2);
 				g_text.draw("Fallback 0" + std::to_string(slot), x + FALLBACK_X - 30, y + 2);
 				g_customPreview[player].showPalette(pick.charId, custom->palette, x + CUSTOM_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
 				g_fallbackPreview[player].showSlot(pick.charId, slot, x + FALLBACK_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
+			} else if (moddedSlot) {
+				// This game's colors (what PaletteShare users see) and the original ones.
+				g_text.draw("Mod", x + CUSTOM_X - 12, y + 2);
+				g_text.draw("Original 0" + std::to_string(pick.index), x + FALLBACK_X - 32, y + 2);
+				g_customPreview[player].showPalette(pick.charId, *moddedSlot, x + CUSTOM_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
+				g_fallbackPreview[player].showSlot(pick.charId, pick.index, x + FALLBACK_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
 			} else {
 				g_customPreview[player].clear();
 				g_fallbackPreview[player].clear();
@@ -474,6 +510,17 @@ namespace ps::picker {
 
 			// Info lines
 			const float infoY = y + PANEL_H - 2 * ROW - 4;
+			if (!custom && moddedSlot) {
+				g_text.draw("Replaced by a palette mod", x + 8, infoY);
+				switch (net::peerStatus()) {
+				case net::PeerStatus::HasMod: g_text.draw("Opponent sees your palette", x + 8, infoY + ROW); break;
+				case net::PeerStatus::NoMod:
+				case net::PeerStatus::Incompatible: g_text.draw("Opponent sees the original", x + 8, infoY + ROW); break;
+				case net::PeerStatus::Checking: g_text.draw("Opponent: checking...", x + 8, infoY + ROW); break;
+				default: g_text.draw(key(pick, ui::Button::D) + ": change fallback", x + 8, infoY + ROW); break;
+				}
+				return;
+			}
 			if (!custom) {
 				g_text.draw("Vanilla palette", x + 8, infoY);
 				return;

@@ -18,6 +18,11 @@
 //
 // The fallback is the vanilla slot (0-7) the game actually sends, so it is what players without
 // PaletteShare (and spectators/replays) see.
+//
+// Slots a palette mod replaces in this game (a shady-loader package, data files) can be used like
+// library palettes too: addModdedSlots adds one "Mod NN" entry per replaced slot, whose fallback
+// is that same slot unless the player sets another ([*mod NN] in palettes.ini; '*' can't appear
+// in a file name, so these never clash with a file's section).
 
 namespace ps {
 	struct LibraryPalette {
@@ -27,6 +32,7 @@ namespace ps {
 		PaletteHash hash;
 		int fallback = 0;
 		bool fallbackIsDefault = true;  // no fallback of its own; uses the character default
+		int modSlot = -1;               // >= 0: not a file but this game's (modded) palette for that slot
 	};
 
 	struct SkippedFile {
@@ -57,6 +63,12 @@ namespace ps {
 	void clearFallback(int charId, const std::wstring &name);
 	// The slot used by palettes without their own fallback.
 	void setDefaultFallback(int charId, int slot);
+
+	// Adds a "Mod NN" entry in front of the library's palettes for each slot this game shows
+	// differently from the original (see above). Game thread (it loads the slots through the game).
+	void addModdedSlots(CharacterLibrary &lib);
+	// The name to show: the file name, or "Mod NN".
+	std::wstring displayName(const LibraryPalette &palette);
 
 	// whyNot (optional) gets a short reason when the file can't be read.
 	std::optional<Palette> readPaletteFile(const std::filesystem::path &file, const char **whyNot = nullptr);

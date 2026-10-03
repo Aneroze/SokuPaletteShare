@@ -1,4 +1,5 @@
 #include "library.hpp"
+#include "ui.hpp"
 #include "log.hpp"
 #include <windows.h>
 #include <algorithm>
@@ -374,6 +375,32 @@ namespace ps {
 		WritePrivateProfileStringW(L"default", L"fallback", std::to_wstring(slot).c_str(), ini.c_str());
 		g_stamp[charId] = stampOf(lib.folder);
 		log("library: %ls default fallback set to %d", lib.folderName.c_str(), slot);
+	}
+
+	void addModdedSlots(CharacterLibrary &lib)
+	{
+		std::vector<LibraryPalette> modded;
+		auto ini = (lib.folder / L"palettes.ini").wstring();
+		for (int slot = 0; slot < 8; slot++) {
+			auto palette = ui::moddedSlot(lib.charId, slot);
+			if (!palette)
+				continue;
+			LibraryPalette item;
+			item.name = L"*mod 0" + std::to_wstring(slot);
+			item.modSlot = slot;
+			item.palette = std::move(*palette);
+			item.hash = hashPalette(item.palette);
+			int fallback = lib.folder.empty() ? -1 : static_cast<int>(GetPrivateProfileIntW(item.name.c_str(), L"fallback", -1, ini.c_str()));
+			item.fallbackIsDefault = fallback < 0 || fallback > 7;
+			item.fallback = item.fallbackIsDefault ? slot : fallback;
+			modded.push_back(std::move(item));
+		}
+		lib.palettes.insert(lib.palettes.begin(), std::make_move_iterator(modded.begin()), std::make_move_iterator(modded.end()));
+	}
+
+	std::wstring displayName(const LibraryPalette &palette)
+	{
+		return palette.modSlot >= 0 ? L"Mod 0" + std::to_wstring(palette.modSlot) : palette.name;
 	}
 
 	std::optional<Palette> readPaletteFile(const std::filesystem::path &file, const char **whyNot)

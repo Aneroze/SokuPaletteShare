@@ -36,6 +36,9 @@
   sides the same custom palette. A load-time check makes side 1 yield if they'd still match.
 - Fixed: a held confirm key chose the palette instantly, and a held arrow scrolled every frame.
 - Fixed: previews swayed left and right while animating (e.g. Reisen).
+- Palette mods (shady-loader packages, data files): slots they replace are marked "(mod)" with
+  "Mod" / "Original NN" previews instead of "same palette for everyone", and each one also gets a
+  "Mod NN" entry with its own fallback (`[*mod NN]` in palettes.ini), like a custom palette.
 
 ## 0.9.0 (2026-10-01)
 

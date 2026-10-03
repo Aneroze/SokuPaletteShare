@@ -44,7 +44,7 @@ namespace ps::menu {
 
 		class PaletteMenu : public SokuLib::IMenu {
 		public:
-			explicit PaletteMenu(int charId) : _charId(charId), _lib(library(charId)) {}
+			explicit PaletteMenu(int charId) : _charId(charId) { refresh(); }
 
 			void _() override {}
 
@@ -116,7 +116,7 @@ namespace ps::menu {
 					}
 					if (_lib.skipped.size() > SHOWN)
 						_text.draw("and " + std::to_string(_lib.skipped.size() - SHOWN) + " more", listX + 8, sy + 16 * (SHOWN + 1));
-				} else if (_lib.palettes.empty()) {
+				} else if (std::none_of(_lib.palettes.begin(), _lib.palettes.end(), [](auto &p) { return p.modSlot < 0; })) {
 					_text.draw("No palettes yet: put .pal/.act/.bmp files in the folder.", listX, y + h - 60);
 				}
 
@@ -124,7 +124,7 @@ namespace ps::menu {
 				const float px = x + 360;
 				if (isPaletteRow()) {
 					auto &p = _lib.palettes[_row];
-					_text.draw("Custom (PaletteShare users see it)", px - 10, y + 50);
+					_text.draw(p.modSlot >= 0 ? "From a palette mod (PaletteShare users see it)" : "Custom (PaletteShare users see it)", px - 10, y + 50);
 					_custom.showPalette(_charId, p.palette, px + 70, y + 190, 120);
 					_text.draw("Fallback " + ui::slotName(p.fallback) + " (everyone else)", px - 10, y + 210);
 					_fallback.showSlot(_charId, p.fallback, px + 70, y + 350, 120);
@@ -158,7 +158,11 @@ namespace ps::menu {
 			bool isFolderRow() const { return _row == static_cast<int>(_lib.palettes.size()) + 1; }
 			bool isCloseRow() const { return _row == static_cast<int>(_lib.palettes.size()) + 2; }
 
-			void refresh() { _lib = library(_charId); }
+			void refresh()
+			{
+				_lib = library(_charId);
+				addModdedSlots(_lib);
+			}
 
 			int close()
 			{
@@ -173,7 +177,7 @@ namespace ps::menu {
 				int n = static_cast<int>(_lib.palettes.size());
 				if (r < n) {
 					auto &p = _lib.palettes[r];
-					_text.draw(ui::narrow(p.name), x, y);
+					_text.draw(ui::narrow(displayName(p)), x, y);
 					_text.draw(ui::slotName(p.fallback) + (p.fallbackIsDefault ? " (default)" : ""), x + 150, y);
 				} else if (r == n) {
 					_text.draw("Character default", x, y);

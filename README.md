@@ -70,6 +70,14 @@ different custom palette whose fallback slot is taken uses the next slot for tha
 panel says "Default 05 taken, others see 06"), and nothing is saved. The two sides never end up
 looking the same.
 
+**Palette mods** (e.g. a shady-loader package replacing `paletteNNN.pal`): a slot that a palette
+mod replaces in your game is marked "(mod)" in the list, and its panel shows **Mod** (your game's
+colors, what PaletteShare users see) next to **Original NN** (what players without palette mods
+see). Each such slot also gets a **Mod NN** entry that works like your own palettes: its fallback
+starts as that same slot (so picking it changes nothing), and you can give it another one, e.g. to
+show players without PaletteShare a different normal palette. The random-select key on a "(mod)"
+slot jumps to its Mod NN entry and edits its fallback. The palette menu lists these entries too.
+
 Each palette's **fallback** is the normal slot (0-7) your game actually sends. It's what players
 without PaletteShare, spectators and replays see, and the picker always shows it ("(default)" when
 it follows the character default). Changes are saved right away to the folder's `palettes.ini`.
