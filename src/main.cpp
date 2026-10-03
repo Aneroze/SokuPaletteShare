@@ -1,6 +1,4 @@
 #include <windows.h>
-#include <shlobj.h>
-#include <knownfolders.h>
 #include <fstream>
 #include <filesystem>
 #include <string>
@@ -25,17 +23,13 @@ static std::filesystem::path modulePath(HMODULE module)
 	return std::filesystem::path(buffer).parent_path();
 }
 
-// Documents\PaletteShare\palettes, if it can be created and written to: outside the game, so
-// updating or removing the mod (SokuLauncher deletes the mod's folder) never takes the palettes.
-static std::filesystem::path outsideLibrary()
+// <game folder>\PaletteShare\palettes (next to modules\), if it can be created and written to:
+// outside the mod's folder, so removing the mod (SokuLauncher deletes modules\PaletteShare) never
+// takes the palettes, yet inside the game folder, so it travels with it and is easy to find on
+// Windows and under Wine/Proton alike.
+static std::filesystem::path gameLibrary()
 {
-	PWSTR documents = nullptr;
-	std::filesystem::path folder;
-	if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_CREATE, nullptr, &documents)) && documents)
-		folder = std::filesystem::path(documents) / L"PaletteShare" / L"palettes";
-	CoTaskMemFree(documents);
-	if (folder.empty())
-		return {};
+	auto folder = modulePath(nullptr) / L"PaletteShare" / L"palettes";
 	std::error_code ec;
 	std::filesystem::create_directories(folder, ec);
 	auto probe = folder / L".write-test";
@@ -114,10 +108,10 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 	ps::log("PaletteShare %s starting in %ls", PALETTESHARE_VERSION, dir.c_str());
 
 	ps::cache.setDirectory(dir / L"cache");
-	auto library = outsideLibrary();
+	auto library = gameLibrary();
 	if (library.empty()) {
 		library = dir / L"palettes";
-		ps::log("library: Documents\\PaletteShare isn't usable, keeping palettes in %ls", library.c_str());
+		ps::log("library: the game folder isn't writable, keeping palettes in %ls", library.c_str());
 	} else {
 		ps::log("library: %ls (palettes in %ls are read too)", library.c_str(), (dir / L"palettes").c_str());
 	}

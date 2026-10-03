@@ -19,18 +19,18 @@ character is shown with, and the other game uses them.
 
 ## Your own palettes (picker)
 
-Put palette files in `Documents\PaletteShare\palettes\<character>\`. The folder name is the game's
+Put palette files in `PaletteShare\palettes\<character>\` in your game folder (next to `modules\`). The folder name is the game's
 internal one (e.g. `reimu`, `udonge` for Reisen, `utsuho` for Okuu, `chirno` for Cirno, `meirin`
 for Meiling). The folders of all 20 characters are created when the game starts. The file name
 (without extension) is the palette's name in the picker. New files show up the next time you open
 that character's palette step; no restart needed. The palette menu's "Open palette folder" opens it.
 
-That folder is outside the game, so updating or removing the mod (removing it in SokuLauncher
-deletes `modules\PaletteShare\`) never takes your palettes or their fallbacks with it, and every
-Soku install on the PC shares it. Files in `modules\PaletteShare\palettes\<character>\` are read
-too (a file in Documents wins over one of the same name there), and the first time a character is
-used, its `palettes.ini` there (fallbacks, last choice) is copied to Documents. If Documents can't be
-used, everything stays in `modules\PaletteShare\palettes\`.
+That folder is outside the mod's own folder, so updating or removing the mod (removing it in
+SokuLauncher deletes `modules\PaletteShare\`) never takes your palettes or their fallbacks with it,
+and it travels with the game folder. Files in `modules\PaletteShare\palettes\<character>\` are read
+too (a file in the game folder's `PaletteShare\palettes` wins over one of the same name there), and
+the first time a character is used, its `palettes.ini` there (fallbacks, last choice) is copied
+over. If the game folder can't be written to, everything stays in `modules\PaletteShare\palettes\`.
 
 Supported files:
 - `.pal`: the game's own format (513 or 1025 bytes, e.g. a shady-loader `paletteNNN.pal`), the old

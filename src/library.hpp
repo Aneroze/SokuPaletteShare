@@ -57,8 +57,8 @@ namespace ps {
 		int lastSlot[2] = {-1, -1};
 	};
 
-	// Palettes are read from `main` (Documents\PaletteShare\palettes when possible, which removing
-	// or updating the mod never touches) and from `mod` (modules\PaletteShare\palettes); a file in
+	// Palettes are read from `main` (<game folder>\PaletteShare\palettes when possible, which
+	// removing or updating the mod never touches) and from `mod` (modules\PaletteShare\palettes); a file in
 	// `main` wins over one of the same name in `mod`. palettes.ini is kept in `main`; the first time
 	// a character is used there, the mod folder's palettes.ini is copied over.
 	void setLibraryRoots(const std::filesystem::path &main, const std::filesystem::path &mod);
