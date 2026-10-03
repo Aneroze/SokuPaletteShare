@@ -23,6 +23,9 @@ namespace ps::net {
 	// The palette the opponent offered for this character and slot, if received (it is in the
 	// cache by then).
 	std::optional<PaletteHash> remotePalette(int charId, int slot);
+	// The palette the opponent shows this character with right now, whatever the slot (at character
+	// select their slot moves one step at a time towards the one their palette falls back to).
+	std::optional<PaletteHash> remoteShown(int charId);
 
 	enum class PeerStatus {
 		NotInNetplay,

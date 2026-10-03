@@ -20,13 +20,13 @@
 namespace ps::proto {
 	constexpr uint8_t PACKET_TYPE = 0xA7;
 	constexpr char MAGIC[4] = {'P', 'S', 'H', 'R'};
-	constexpr uint8_t VERSION = 1;
+	constexpr uint8_t VERSION = 2;  // 2: palette chunks carry an offer sequence number
 	constexpr size_t HEADER_SIZE = 7;
 	constexpr size_t MAX_CHUNK = 900;
 
 	enum Kind : uint8_t {
 		KIND_HELLO = 1,   // u8 role (0 = player, 1 = spectator), u8 isReply
-		KIND_PALETTE = 2, // u16 charId, u8 slot, u8[16] hash, u16 totalSize, u16 offset, u16 len, bytes
+		KIND_PALETTE = 2, // u32 seq, u16 charId, u8 slot, u8[16] hash, u16 totalSize, u16 offset, u16 len, bytes
 		KIND_ACK = 3,     // u8[16] hash
 	};
 
@@ -42,6 +42,7 @@ namespace ps::proto {
 	};
 
 	struct PaletteChunk {
+		uint32_t seq;      // the sender's offer number this session: a higher one replaces a lower one
 		uint16_t charId;
 		uint8_t slot;
 		PaletteHash hash;
@@ -56,7 +57,7 @@ namespace ps::proto {
 	std::vector<uint8_t> makeHello(Role role, bool isReply);
 	std::vector<uint8_t> makeAck(const PaletteHash &hash);
 	// Splits the serialized palette into chunk packets.
-	std::vector<std::vector<uint8_t>> makePalette(uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized);
+	std::vector<std::vector<uint8_t>> makePalette(uint32_t seq, uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized);
 
 	std::optional<Hello> parseHello(const uint8_t *data, size_t size);
 	std::optional<PaletteChunk> parsePalette(const uint8_t *data, size_t size);

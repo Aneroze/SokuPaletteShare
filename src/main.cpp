@@ -47,11 +47,12 @@ static int iniInt(const std::filesystem::path &ini, const wchar_t *section, cons
 static void loadConfig(const std::filesystem::path &ini)
 {
 	ps::config.showOpponentPalettes = iniInt(ini, L"Display", L"ShowOpponentPalettes", 1) != 0;
+	ps::config.showOriginalPalettes = iniInt(ini, L"Picker", L"ShowOriginalPalettes", 0) != 0;
 	ps::config.toggleModifier = iniInt(ini, L"Hotkey", L"Modifier", VK_CONTROL);
 	ps::config.toggleKey = iniInt(ini, L"Hotkey", L"Key", 'P');
 	ps::config.hotkeyIgnoresFocus = iniInt(ini, L"Debug", L"HotkeyIgnoresFocus", 0) != 0;
-	ps::log("config: ShowOpponentPalettes=%d hotkey modifier=0x%02X key=0x%02X",
-		ps::config.showOpponentPalettes, ps::config.toggleModifier, ps::config.toggleKey);
+	ps::log("config: ShowOpponentPalettes=%d ShowOriginalPalettes=%d hotkey modifier=0x%02X key=0x%02X",
+		ps::config.showOpponentPalettes, ps::config.showOriginalPalettes, ps::config.toggleModifier, ps::config.toggleKey);
 
 	const wchar_t *keys[2] = {L"ForcePaletteLeft", L"ForcePaletteRight"};
 	for (int side = 0; side < 2; side++) {

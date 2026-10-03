@@ -33,6 +33,7 @@ namespace ps {
 		int fallback = 0;
 		bool fallbackIsDefault = true;  // no fallback of its own; uses the character default
 		int modSlot = -1;               // >= 0: not a file but this game's (modded) palette for that slot
+		int originalSlot = -1;          // >= 0: not a file but the game's original colors for that slot
 	};
 
 	struct SkippedFile {
@@ -65,9 +66,11 @@ namespace ps {
 	void setDefaultFallback(int charId, int slot);
 
 	// Adds a "Mod NN" entry in front of the library's palettes for each slot this game shows
-	// differently from the original (see above). Game thread (it loads the slots through the game).
-	void addModdedSlots(CharacterLibrary &lib);
-	// The name to show: the file name, or "Mod NN".
+	// differently from the original (see above), and with `originals` an "Original NN" entry with
+	// the original colors of each such slot (always sent as that slot: no fallback of its own).
+	// Game thread (it loads the slots through the game).
+	void addModdedSlots(CharacterLibrary &lib, bool originals);
+	// The name to show: the file name, "Mod NN" or "Original NN".
 	std::wstring displayName(const LibraryPalette &palette);
 
 	// whyNot (optional) gets a short reason when the file can't be read.

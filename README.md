@@ -71,12 +71,13 @@ panel says "Default 05 taken, others see 06"), and nothing is saved. The two sid
 looking the same.
 
 **Palette mods** (e.g. a shady-loader package replacing `paletteNNN.pal`): a slot that a palette
-mod replaces in your game is marked "(mod)" in the list, and its panel shows **Mod** (your game's
-colors, what PaletteShare users see) next to **Original NN** (what players without palette mods
-see). Each such slot also gets a **Mod NN** entry that works like your own palettes: its fallback
-starts as that same slot (so picking it changes nothing), and you can give it another one, e.g. to
-show players without PaletteShare a different normal palette. The random-select key on a "(mod)"
-slot jumps to its Mod NN entry and edits its fallback. The palette menu lists these entries too.
+mod replaces in your game is marked "(mod)" in the list (e.g. "Default 03 (mod)") and works like
+your own palettes: its panel shows **Mod** (your game's colors, what PaletteShare users see) next to
+**Fallback NN** (the original colors players without palette mods see). Its fallback is that same
+slot unless you change it with the random-select key, e.g. to show players without PaletteShare a
+different normal palette. The palette menu lists these slots as "Mod NN". With
+`[Picker] ShowOriginalPalettes=1` the list also offers the game's **original colors** of each
+replaced slot ("Original 03"), always sent as that slot.
 
 Each palette's **fallback** is the normal slot (0-7) your game actually sends. It's what players
 without PaletteShare, spectators and replays see, and the picker always shows it ("(default)" when
@@ -89,6 +90,10 @@ The picker remembers your last choice per character.
   Use it if an opponent's palette is hard to look at. Your choice stays until you toggle again or
   restart the game. The key is configurable under `[Hotkey]`.
 - `[Display] ShowOpponentPalettes=0` starts with opponents' custom palettes hidden.
+- `[Picker] ShowOriginalPalettes=1` lists the original colors of slots a palette mod replaces
+  ("Original 03"), so you can still pick them.
+- `[Debug] Log=1` writes `PaletteShare.log` next to the DLL; the previous run's log is kept as
+  `PaletteShare.prev.log`.
 
 ## Safety
 

@@ -7,6 +7,9 @@ namespace ps {
 	struct Config {
 		// [Display] ShowOpponentPalettes: start with the opponent's custom palette shown.
 		bool showOpponentPalettes = true;
+		// [Picker] ShowOriginalPalettes: for each slot a palette mod replaces, also list the game's
+		// original colors for that slot ("Original NN"), usable like a custom palette.
+		bool showOriginalPalettes = false;
 		// [Hotkey] Modifier + Key (virtual-key codes): toggle the opponent's custom palette, even
 		// mid-match. Modifier 0 = key alone.
 		int toggleModifier = VK_CONTROL;

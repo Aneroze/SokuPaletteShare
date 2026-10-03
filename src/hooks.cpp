@@ -78,14 +78,15 @@ namespace ps {
 			return local < 0 ? -1 : 1 - local;
 		}
 
-		// The palette to offer as "custom" for a side: debug force first, then the opponent's.
-		std::optional<Palette> customFor(int side, int charId, int slot, const Palette &reference)
+		// The palette to offer as "custom" for a side: debug force first, then the opponent's: the one
+		// they offered for this slot, or (character select previews, anySlot) the one they show now.
+		std::optional<Palette> customFor(int side, int charId, int slot, const Palette &reference, bool anySlot = false)
 		{
 			std::optional<PaletteHash> hash;
 			if (config.forcePalette[side])
 				hash = config.forcePalette[side];
 			else if (side == remoteSide())
-				hash = net::remotePalette(charId, slot);
+				hash = anySlot ? net::remoteShown(charId) : net::remotePalette(charId, slot);
 			if (!hash)
 				return std::nullopt;
 
@@ -195,6 +196,8 @@ namespace ps {
 				net::offerLocal(side.charId, side.slot, side.vanilla, hash);
 
 			side.custom = customFor(index, side.charId, side.slot, side.vanilla);
+			if (!side.custom && index == remoteSide())
+				log("  side=%d: no palette from the opponent for char=%d slot=%d (yet)", index, side.charId, side.slot);
 			if (side.custom && looksLikeSide0(index, side.charId, *side.custom)) {
 				log("  side=%d: custom palette is the same as side 0's (mirror), showing game slot %d", index, side.slot);
 				side.custom.reset();
@@ -230,7 +233,7 @@ namespace ps {
 			auto &palette = SokuLib::Palette::currentPalette;
 
 			if (SokuLib::sceneId == SokuLib::SCENE_SELECT || playerId == local) {
-				if (auto mine = picker::customFor(playerId, charId))
+				if (auto mine = picker::previewFor(playerId, charId, slot))
 					writeGamePalette(*mine, palette);
 			}
 			if (local < 0)
@@ -245,7 +248,7 @@ namespace ps {
 				cache.store(current, hash);
 				net::offerLocal(charId, slot, current, hash);
 			} else if (g_showOpponent) {
-				if (auto custom = customFor(playerId, charId, slot, current))
+				if (auto custom = customFor(playerId, charId, slot, current, true))
 					writeGamePalette(*custom, palette);
 			}
 		}

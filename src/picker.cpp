@@ -36,7 +36,12 @@ namespace ps::picker {
 			bool active = false;     // in the palette step and driven by us
 			int charId = -1;
 			CharacterLibrary lib;    // snapshot taken when the palette step started
-			int index = 0;           // 0..7 vanilla slots, 8.. library palettes ("Mod NN" first)
+			int index = 0;           // 0..7 vanilla slots, 8.. library palettes
+			// A slot a palette mod replaces in this game works like a library palette with its own
+			// fallback (its own slot unless the player sets another); null for a normal slot.
+			std::optional<LibraryPalette> mods[8];
+			// This game's palette for each slot, to preview a slot before the wheel reaches it.
+			std::optional<Palette> slotPalettes[8];
 			bool previewDirty = false;
 			Steer steer = Steer::Idle;
 			int wheelAtPress = -1;
@@ -57,15 +62,23 @@ namespace ps::picker {
 			std::optional<Palette> confirmedCustom;
 
 			int count() const { return 8 + static_cast<int>(lib.palettes.size()); }
-			LibraryPalette *custom() { return index >= 8 ? &lib.palettes[index - 8] : nullptr; }
-			const LibraryPalette *custom() const { return index >= 8 ? &lib.palettes[index - 8] : nullptr; }
+			// The entry's palette with a fallback of its own (library or replaced slot), or null.
+			const LibraryPalette *entry(int i) const
+			{
+				if (i < 8)
+					return mods[i] ? &*mods[i] : nullptr;
+				return &lib.palettes[i - 8];
+			}
+			LibraryPalette *custom() { return const_cast<LibraryPalette *>(entry(index)); }
+			const LibraryPalette *custom() const { return entry(index); }
 			// The slot our palette asks for, and the slot it gets this match: a taken slot moves
 			// to the next one, like the game bumps it (0x42084D).
 			int wantedSlot() const
 			{
-				if (index < 8)
+				auto c = custom();
+				if (!c)
 					return index;
-				return editing ? editSlot : lib.palettes[index - 8].fallback;
+				return editing ? editSlot : c->fallback;
 			}
 			int bumped(int slot) const { return slot == takenSlot ? (slot + 1) % 8 : slot; }
 			int target() const { return bumped(wantedSlot()); }
@@ -73,19 +86,10 @@ namespace ps::picker {
 			// Entries the other side of a mirror match already uses: its slot, or its palette.
 			bool taken(int i) const
 			{
-				if (i < 8)
-					return i == takenSlot;
-				auto &p = lib.palettes[i - 8];
-				// A "Mod NN" entry looks exactly like slot NN does in this game.
-				return (p.modSlot >= 0 && p.modSlot == takenSlot) || (takenPalette && sameColors(p.palette, *takenPalette));
-			}
-			// The "Mod NN" entry of a slot a palette mod replaces, or -1.
-			int modEntry(int slot) const
-			{
-				for (size_t i = 0; i < lib.palettes.size(); i++)
-					if (lib.palettes[i].modSlot == slot)
-						return 8 + static_cast<int>(i);
-				return -1;
+				if (i < 8 && i == takenSlot)
+					return true;
+				auto p = entry(i);
+				return p && takenPalette && sameColors(p->palette, *takenPalette);
 			}
 			// The nearest entry in that direction the other side doesn't use (the game's skip).
 			int step(int from, int direction) const
@@ -182,20 +186,31 @@ namespace ps::picker {
 			pick.active = true;
 			pick.charId = charId;
 			pick.lib = library(charId);
-			addModdedSlots(pick.lib);
+			addModdedSlots(pick.lib, config.showOriginalPalettes);
+			int modded = 0;
+			for (auto it = pick.lib.palettes.begin(); it != pick.lib.palettes.end();) {
+				if (it->modSlot >= 0) {
+					pick.mods[it->modSlot] = std::move(*it);
+					it = pick.lib.palettes.erase(it);
+					modded++;
+				} else {
+					++it;
+				}
+			}
+			for (int slot = 0; slot < 8; slot++)
+				pick.slotPalettes[slot] = ui::gameSlot(charId, slot);
 			pick.index = wheel;
 			int who = memoryOf(side);
 			if (!pick.lib.lastSelected[who].empty()) {
-				for (size_t i = 0; i < pick.lib.palettes.size(); i++)
-					if (pick.lib.palettes[i].name == pick.lib.lastSelected[who])
-						pick.index = 8 + static_cast<int>(i);
+				for (int i = 0; i < pick.count(); i++)
+					if (auto p = pick.entry(i); p && p->name == pick.lib.lastSelected[who])
+						pick.index = i;
 			} else if (pick.lib.lastSlot[who] >= 0 && pick.lib.lastSlot[who] < 8) {
 				pick.index = pick.lib.lastSlot[who];
 			}
 			pick.previewDirty = true;
-			log("picker: palette step for side=%d char=%d, %d custom palette(s) (%d from palette mods), starting at %d", side, charId,
-				(int)pick.lib.palettes.size(), (int)std::count_if(pick.lib.palettes.begin(), pick.lib.palettes.end(), [](auto &p) { return p.modSlot >= 0; }),
-				pick.index);
+			log("picker: palette step for side=%d char=%d, %d custom palette(s), %d slot(s) replaced by palette mods, starting at %d", side,
+				charId, (int)pick.lib.palettes.size(), modded, pick.index);
 		}
 
 		// Mirror match: what the other side uses, as the game decides it (0x4204A0: only once the
@@ -310,19 +325,8 @@ namespace ps::picker {
 				}
 				if (in.a == 1)
 					pick.pendingConfirm = true;
-				// D edits the highlighted palette's fallback (it replaces the game's random palette). On a
-				// slot a palette mod replaces, it moves to that slot's "Mod NN" entry first.
-				if (in.d == 1 && !pick.custom()) {
-					int entry = pick.modEntry(pick.index);
-					if (entry >= 0 && !pick.taken(entry)) {
-						pick.index = entry;
-						pick.previewDirty = true;
-						pick.presses = 0;
-						pick.unreachable = -1;
-						pick.confirmed = false;
-					}
-				}
-				if (in.d == 1 && pick.custom()) {
+				// D edits the highlighted palette's fallback (it replaces the game's random palette).
+				if (in.d == 1 && pick.custom() && pick.custom()->originalSlot < 0) {
 					pick.editing = true;
 					pick.editSlot = pick.custom()->fallback;
 					pick.pendingConfirm = false;
@@ -448,7 +452,7 @@ namespace ps::picker {
 		{
 			index = (index % pick.count() + pick.count()) % pick.count();
 			if (index < 8)
-				return ui::slotName(index) + (pick.modEntry(index) >= 0 ? " (mod)" : "");
+				return ui::slotName(index) + (pick.mods[index] ? " (mod)" : "");
 			return ui::narrow(displayName(pick.lib.palettes[index - 8]));
 		}
 
@@ -486,21 +490,21 @@ namespace ps::picker {
 
 			// Previews
 			auto custom = pick.custom();
-			std::optional<Palette> moddedSlot;
-			if (!custom && pick.modEntry(pick.index) >= 0)
-				moddedSlot = pick.lib.palettes[pick.modEntry(pick.index) - 8].palette;
 			if (custom) {
 				int slot = pick.target();
-				g_text.draw("Custom", x + CUSTOM_X - 20, y + 2);
-				g_text.draw("Fallback 0" + std::to_string(slot), x + FALLBACK_X - 30, y + 2);
+				if (custom->modSlot >= 0)  // this game's colors for a slot a palette mod replaces
+					g_text.draw("Mod", x + CUSTOM_X - 12, y + 2);
+				else if (custom->originalSlot >= 0)
+					g_text.draw("Original", x + CUSTOM_X - 22, y + 2);
+				else
+					g_text.draw("Custom", x + CUSTOM_X - 20, y + 2);
 				g_customPreview[player].showPalette(pick.charId, custom->palette, x + CUSTOM_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
-				g_fallbackPreview[player].showSlot(pick.charId, slot, x + FALLBACK_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
-			} else if (moddedSlot) {
-				// This game's colors (what PaletteShare users see) and the original ones.
-				g_text.draw("Mod", x + CUSTOM_X - 12, y + 2);
-				g_text.draw("Original 0" + std::to_string(pick.index), x + FALLBACK_X - 32, y + 2);
-				g_customPreview[player].showPalette(pick.charId, *moddedSlot, x + CUSTOM_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
-				g_fallbackPreview[player].showSlot(pick.charId, pick.index, x + FALLBACK_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
+				if (custom->originalSlot >= 0) {  // always its own slot: no fallback to show
+					g_fallbackPreview[player].clear();
+				} else {
+					g_text.draw("Fallback 0" + std::to_string(slot), x + FALLBACK_X - 30, y + 2);
+					g_fallbackPreview[player].showSlot(pick.charId, slot, x + FALLBACK_X, y + PANEL_H - 3, PREVIEW_HEIGHT);
+				}
 			} else {
 				g_customPreview[player].clear();
 				g_fallbackPreview[player].clear();
@@ -510,17 +514,6 @@ namespace ps::picker {
 
 			// Info lines
 			const float infoY = y + PANEL_H - 2 * ROW - 4;
-			if (!custom && moddedSlot) {
-				g_text.draw("Replaced by a palette mod", x + 8, infoY);
-				switch (net::peerStatus()) {
-				case net::PeerStatus::HasMod: g_text.draw("Opponent sees your palette", x + 8, infoY + ROW); break;
-				case net::PeerStatus::NoMod:
-				case net::PeerStatus::Incompatible: g_text.draw("Opponent sees the original", x + 8, infoY + ROW); break;
-				case net::PeerStatus::Checking: g_text.draw("Opponent: checking...", x + 8, infoY + ROW); break;
-				default: g_text.draw(key(pick, ui::Button::D) + ": change fallback", x + 8, infoY + ROW); break;
-				}
-				return;
-			}
 			if (!custom) {
 				g_text.draw("Vanilla palette", x + 8, infoY);
 				return;
@@ -530,12 +523,13 @@ namespace ps::picker {
 				g_text.draw("Up/Down  " + key(pick, ui::Button::D) + " save  " + key(pick, ui::Button::B) + " cancel", x + 8, infoY + ROW);
 				return;
 			}
-			std::string fallback = "Fallback " + ui::slotName(custom->fallback) + (custom->fallbackIsDefault ? " (default)" : "");
+			bool original = custom->originalSlot >= 0;
+			std::string fallback = original ? "Original colors" : "Fallback " + ui::slotName(custom->fallback) + (custom->fallbackIsDefault ? " (default)" : "");
 			if (pick.bumped(custom->fallback) != custom->fallback)  // mirror match: this match only
 				fallback = ui::slotName(custom->fallback) + " taken, others see 0" + std::to_string(pick.bumped(custom->fallback));
 			else if (pick.unreachable == custom->fallback)
 				fallback = ui::slotName(custom->fallback) + " can't be reached";
-			else if (ui::slotDiffersFromOriginal(pick.charId, custom->fallback))
+			else if (!original && ui::slotDiffersFromOriginal(pick.charId, custom->fallback))
 				// a palette mod replaces the slot in this game; the preview shows what players
 				// without palette mods see
 				fallback = "Fallback 0" + std::to_string(custom->fallback) + ": original colors";
@@ -546,7 +540,10 @@ namespace ps::picker {
 			case net::PeerStatus::NoMod:
 			case net::PeerStatus::Incompatible: g_text.draw("Opponent sees " + ui::slotName(pick.target()), x + 8, infoY + ROW); break;
 			case net::PeerStatus::Checking: g_text.draw("Opponent: checking...", x + 8, infoY + ROW); break;
-			default: g_text.draw(key(pick, ui::Button::D) + ": change fallback", x + 8, infoY + ROW); break;
+			default:
+				if (!original)
+					g_text.draw(key(pick, ui::Button::D) + ": change fallback", x + 8, infoY + ROW);
+				break;
 			}
 		}
 
@@ -626,6 +623,26 @@ namespace ps::picker {
 			RenderHook<N>::orig = reinterpret_cast<int (__fastcall *)(void *)>(*slot);
 			*slot = reinterpret_cast<DWORD>(&RenderHook<N>::hook);
 		}
+	}
+
+	std::optional<Palette> previewFor(int player, int charId, int slot)
+	{
+		if (player < 0 || player > 1)
+			return std::nullopt;
+		std::lock_guard lock(g_mutex);
+		auto &pick = g_picks[player];
+		if (pick.active && pick.charId == charId) {
+			if (auto custom = pick.custom())
+				return custom->palette;
+			// A normal slot the wheel is still on its way to: show that slot's colors already, not
+			// the ones it passes on the way.
+			if (slot != pick.index && pick.slotPalettes[pick.index])
+				return pick.slotPalettes[pick.index];
+			return std::nullopt;
+		}
+		if (pick.confirmed && pick.confirmedChar == charId)
+			return pick.confirmedCustom;
+		return std::nullopt;
 	}
 
 	std::optional<Palette> customFor(int player, int charId)

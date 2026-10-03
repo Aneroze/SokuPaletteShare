@@ -1,4 +1,5 @@
 #include "library.hpp"
+#include "original.hpp"
 #include "ui.hpp"
 #include "log.hpp"
 #include <windows.h>
@@ -377,30 +378,50 @@ namespace ps {
 		log("library: %ls default fallback set to %d", lib.folderName.c_str(), slot);
 	}
 
-	void addModdedSlots(CharacterLibrary &lib)
+	void addModdedSlots(CharacterLibrary &lib, bool originals)
 	{
-		std::vector<LibraryPalette> modded;
+		std::vector<LibraryPalette> modded, original;
 		auto ini = (lib.folder / L"palettes.ini").wstring();
-		for (int slot = 0; slot < 8; slot++) {
-			auto palette = ui::moddedSlot(lib.charId, slot);
-			if (!palette)
-				continue;
+		auto entry = [&](std::wstring name, int slot, Palette palette) {
 			LibraryPalette item;
-			item.name = L"*mod 0" + std::to_wstring(slot);
-			item.modSlot = slot;
-			item.palette = std::move(*palette);
+			item.name = std::move(name);
+			item.palette = std::move(palette);
 			item.hash = hashPalette(item.palette);
 			int fallback = lib.folder.empty() ? -1 : static_cast<int>(GetPrivateProfileIntW(item.name.c_str(), L"fallback", -1, ini.c_str()));
 			item.fallbackIsDefault = fallback < 0 || fallback > 7;
 			item.fallback = item.fallbackIsDefault ? slot : fallback;
-			modded.push_back(std::move(item));
+			return item;
+		};
+		for (int slot = 0; slot < 8; slot++) {
+			auto palette = ui::moddedSlot(lib.charId, slot);
+			if (!palette)
+				continue;
+			modded.push_back(entry(L"*mod 0" + std::to_wstring(slot), slot, std::move(*palette)));
+			modded.back().modSlot = slot;
+			if (!originals)
+				continue;
+			if (auto colors = original::palette(ui::internalName(lib.charId), slot)) {
+				LibraryPalette item;  // always its own slot: no fallback of its own
+				item.name = L"*original 0" + std::to_wstring(slot);
+				item.originalSlot = slot;
+				item.palette = std::move(*colors);
+				item.hash = hashPalette(item.palette);
+				item.fallback = slot;
+				item.fallbackIsDefault = false;
+				original.push_back(std::move(item));
+			}
 		}
+		modded.insert(modded.end(), std::make_move_iterator(original.begin()), std::make_move_iterator(original.end()));
 		lib.palettes.insert(lib.palettes.begin(), std::make_move_iterator(modded.begin()), std::make_move_iterator(modded.end()));
 	}
 
 	std::wstring displayName(const LibraryPalette &palette)
 	{
-		return palette.modSlot >= 0 ? L"Mod 0" + std::to_wstring(palette.modSlot) : palette.name;
+		if (palette.modSlot >= 0)
+			return L"Mod 0" + std::to_wstring(palette.modSlot);
+		if (palette.originalSlot >= 0)
+			return L"Original 0" + std::to_wstring(palette.originalSlot);
+		return palette.name;
 	}
 
 	std::optional<Palette> readPaletteFile(const std::filesystem::path &file, const char **whyNot)
@@ -429,6 +450,11 @@ namespace ps {
 			if (ext == L".pal") {
 				if (auto p = Palette::deserialize(d.data(), d.size()))
 					return p;  // the game's own format (513 or 1025 bytes)
+				// Some shady-loader packages ship 16-bit game palettes with a few extra bytes at the
+				// end (515 bytes); the game reads the first 513.
+				if (d.size() > 513 && d.size() <= 513 + 16 && d[0] == 16)
+					if (auto p = Palette::deserialize(d.data(), 513))
+						return p;
 				if (b.startsWith(0, "JASC-PAL"))
 					return readJasc(b, why);
 				if (b.startsWith(0, "RIFF") && b.startsWith(8, "PAL "))

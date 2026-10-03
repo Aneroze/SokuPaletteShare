@@ -22,4 +22,8 @@ namespace ps::picker {
 	// The custom palette highlighted (character select) or confirmed (loading) for this player and
 	// character, if it is a custom one. nullopt = a vanilla slot, or not ours to pick.
 	std::optional<Palette> customFor(int player, int charId);
+	// What the character-select preview of that player shows, built with the game's palette for
+	// `slot` (the wheel's position): the highlighted entry's colors even while the wheel is still
+	// stepping towards its slot. nullopt = the game's palette for that slot.
+	std::optional<Palette> previewFor(int player, int charId, int slot);
 }

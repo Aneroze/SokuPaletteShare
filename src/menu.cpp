@@ -161,7 +161,7 @@ namespace ps::menu {
 			void refresh()
 			{
 				_lib = library(_charId);
-				addModdedSlots(_lib);
+				addModdedSlots(_lib, false);  // "Original NN" entries have no fallback to set
 			}
 
 			int close()

@@ -36,9 +36,19 @@
   sides the same custom palette. A load-time check makes side 1 yield if they'd still match.
 - Fixed: a held confirm key chose the palette instantly, and a held arrow scrolled every frame.
 - Fixed: previews swayed left and right while animating (e.g. Reisen).
-- Palette mods (shady-loader packages, data files): slots they replace are marked "(mod)" with
-  "Mod" / "Original NN" previews instead of "same palette for everyone", and each one also gets a
-  "Mod NN" entry with its own fallback (`[*mod NN]` in palettes.ini), like a custom palette.
+- Palette mods (shady-loader packages, data files): slots they replace are marked "(mod)" instead of
+  "same palette for everyone" and work like custom palettes, with "Mod" / "Fallback NN" previews and
+  a fallback of their own (`[*mod NN]` in palettes.ini, the same slot by default).
+- `[Picker] ShowOriginalPalettes=1` also lists the game's original colors of replaced slots
+  ("Original NN", always sent as that slot).
+- Protocol version 2: palette offers are numbered. Fixed: the opponent sometimes loaded with their
+  own palette for your fallback slot instead of your custom one (about 1 match in 20 online), when an
+  offer made while your palette wheel was moving arrived after the final one.
+- Fixed: while the palette wheel steps towards a palette's slot, the previews (yours and the
+  opponent's) flashed the slots it passed on the way.
+- Game-format `.pal` files with a few extra bytes at the end (515-byte shady-loader palettes) are
+  read.
+- The previous run's log is kept as `PaletteShare.prev.log`.
 - Character select shows the opponent's palette as soon as it arrives. Before, their preview was
   only rebuilt when their palette wheel moved, usually just before their palette arrived (and never
   for a custom palette on the slot they were already on).

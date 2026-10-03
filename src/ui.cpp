@@ -34,33 +34,46 @@ namespace ps::ui {
 		}
 	}
 
-	std::optional<Palette> moddedSlot(int charId, int slot)
+	std::optional<Palette> gameSlot(int charId, int slot)
 	{
-		// Re-checked every couple of seconds rather than once, in case a mod changes its palettes
+		// Re-loaded every couple of seconds rather than once, in case a mod changes its palettes
 		// while the game runs.
-		struct Check { std::optional<Palette> modded; DWORD at; };
-		static std::map<std::pair<int, int>, Check> cache;
-		constexpr DWORD RECHECK_MS = 2000;
+		struct Loaded { std::optional<Palette> palette; DWORD at; };
+		static std::map<std::pair<int, int>, Loaded> cache;
+		constexpr DWORD RELOAD_MS = 2000;
 		DWORD now = GetTickCount();
 		auto it = cache.find({charId, slot});
-		if (it != cache.end() && now - it->second.at < RECHECK_MS)
-			return it->second.modded;
+		if (it != cache.end() && now - it->second.at < RELOAD_MS)
+			return it->second.palette;
 		const char *name = internalName(charId);
-		auto orig = original::palette(name, slot);
-		std::optional<Palette> modded;
-		if (orig && name && *name) {
+		std::optional<Palette> result;
+		if (name && *name && slot >= 0 && slot < 8) {
 			auto &current = SokuLib::Palette::currentPalette;
 			auto saved = readGamePalette(current);
 			loadGameSlot(name, slot);
-			auto loaded = readGamePalette(current);
-			if (loaded.valid() && !sameColors(loaded, *orig))
-				modded = std::move(loaded);
+			if (auto loaded = readGamePalette(current); loaded.valid())
+				result = std::move(loaded);
 			if (saved.valid())
 				writeGamePalette(saved, current);
 		}
-		if (it == cache.end() || it->second.modded.has_value() != modded.has_value())
+		cache[{charId, slot}] = {result, now};
+		return result;
+	}
+
+	std::optional<Palette> moddedSlot(int charId, int slot)
+	{
+		static std::map<std::pair<int, int>, bool> logged;
+		const char *name = internalName(charId);
+		auto orig = original::palette(name, slot);
+		auto loaded = gameSlot(charId, slot);
+		std::optional<Palette> modded;
+		if (orig && loaded && !sameColors(*loaded, *orig))
+			modded = loaded;
+		auto seen = logged.find({charId, slot});
+		if (orig && (seen == logged.end() || seen->second != modded.has_value())) {
 			log("ui: %s slot %d %s the original", name ? name : "?", slot, modded ? "differs from" : "matches");
-		cache[{charId, slot}] = {modded, now};
+			logged[{charId, slot}] = modded.has_value();
+		}
 		return modded;
 	}
 

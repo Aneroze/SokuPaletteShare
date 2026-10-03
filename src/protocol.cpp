@@ -16,6 +16,7 @@ namespace ps::proto {
 
 			void u8(uint8_t v) { _out.push_back(v); }
 			void u16(uint16_t v) { u8(v & 0xFF); u8(v >> 8); }
+			void u32(uint32_t v) { u16(v & 0xFFFF); u16(v >> 16); }
 			void bytes(const uint8_t *p, size_t n) { _out.insert(_out.end(), p, p + n); }
 			std::vector<uint8_t> take() { return std::move(_out); }
 
@@ -33,6 +34,13 @@ namespace ps::proto {
 				if (_pos + 2 > _size) return false;
 				v = static_cast<uint16_t>(_data[_pos] | _data[_pos + 1] << 8);
 				_pos += 2;
+				return true;
+			}
+			bool u32(uint32_t &v)
+			{
+				uint16_t lo, hi;
+				if (!u16(lo) || !u16(hi)) return false;
+				v = lo | static_cast<uint32_t>(hi) << 16;
 				return true;
 			}
 			bool bytes(uint8_t *out, size_t n) { if (_pos + n > _size) return false; memcpy(out, _data + _pos, n); _pos += n; return true; }
@@ -79,12 +87,13 @@ namespace ps::proto {
 		return w.take();
 	}
 
-	std::vector<std::vector<uint8_t>> makePalette(uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized)
+	std::vector<std::vector<uint8_t>> makePalette(uint32_t seq, uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized)
 	{
 		std::vector<std::vector<uint8_t>> packets;
 		for (size_t offset = 0; offset < serialized.size(); offset += MAX_CHUNK) {
 			size_t len = std::min(MAX_CHUNK, serialized.size() - offset);
 			Writer w(KIND_PALETTE);
+			w.u32(seq);
 			w.u16(charId);
 			w.u8(slot);
 			w.bytes(hash.bytes.data(), hash.bytes.size());
@@ -118,7 +127,7 @@ namespace ps::proto {
 		Reader r(data, size);
 		PaletteChunk c;
 		uint16_t len;
-		if (!r.u16(c.charId) || !r.u8(c.slot) || !r.bytes(c.hash.bytes.data(), c.hash.bytes.size()) ||
+		if (!r.u32(c.seq) || !r.u16(c.charId) || !r.u8(c.slot) || !r.bytes(c.hash.bytes.data(), c.hash.bytes.size()) ||
 		    !r.u16(c.totalSize) || !r.u16(c.offset) || !r.u16(len))
 			return std::nullopt;
 		// Only the two real palette sizes, and a chunk that fits inside it.

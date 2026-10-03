@@ -59,6 +59,8 @@ namespace ps::ui {
 	// The same check, with this game's palette for the slot when it differs (nullopt when it
 	// doesn't, or when the archives can't be read).
 	std::optional<Palette> moddedSlot(int charId, int slot);
+	// This game's palette for a slot, palette mods included (cached for 2 s). Game thread.
+	std::optional<Palette> gameSlot(int charId, int slot);
 
 	// What to press for a game button, as bound in that keymap: the keyboard key's name ("Z", "A")
 	// or the gamepad button ("Pad3"). Hints use this rather than the game's button letters, since

@@ -32,6 +32,7 @@ namespace ps::net {
 		RecvFrom orig_recvfrom = nullptr;
 
 		struct Offer {
+			uint32_t seq;
 			int charId;
 			int slot;
 			PaletteHash hash;
@@ -42,6 +43,7 @@ namespace ps::net {
 		};
 
 		struct Pending {
+			uint32_t seq;
 			int charId;
 			int slot;
 			std::vector<uint8_t> data;
@@ -51,7 +53,8 @@ namespace ps::net {
 		};
 
 		struct RemoteEntry {
-			int slot;
+			uint32_t seq = 0;
+			int slot = -1;
 			PaletteHash hash;
 		};
 
@@ -65,7 +68,12 @@ namespace ps::net {
 		ULONGLONG g_nextHello = 0;
 		std::optional<Offer> g_offer;
 		std::map<std::array<uint8_t, 16>, Pending> g_pending;
-		std::map<int, RemoteEntry> g_remote;  // charId -> latest palette the opponent offered
+		// What the opponent offered, by offer number, so a late or reordered datagram never replaces a
+		// newer offer: the latest per character (what they show right now, for previews) and the
+		// latest per character and slot (what they'll load with that slot).
+		std::map<int, RemoteEntry> g_remote;
+		std::map<std::pair<int, int>, RemoteEntry> g_remoteBySlot;
+		uint32_t g_nextSeq = 1;
 		std::atomic<unsigned> g_generation = 0;
 
 		bool sameAddr(const sockaddr_in &a, const sockaddr_in &b)
@@ -121,6 +129,7 @@ namespace ps::net {
 			g_offer.reset();
 			g_pending.clear();
 			g_remote.clear();
+			g_remoteBySlot.clear();
 		}
 
 		void onHello(const proto::Hello &hello, const sockaddr_in &from)
@@ -145,6 +154,26 @@ namespace ps::net {
 				g_offer->nextSend = 0;  // send our palette right away
 		}
 
+		// Records an offer whose palette is in the cache; offers older than what we have are ignored.
+		void remember(uint32_t seq, int charId, int slot, const PaletteHash &hash, bool fresh)
+		{
+			auto &bySlot = g_remoteBySlot[{charId, slot}];
+			if (seq > bySlot.seq)
+				bySlot = {seq, slot, hash};
+			auto &latest = g_remote[charId];
+			if (seq <= latest.seq) {
+				if (seq < latest.seq)
+					log("net: older offer #%u char=%d slot=%d arrived after #%u, not shown", seq, charId, slot, latest.seq);
+				return;
+			}
+			bool changed = latest.slot != slot || !(latest.hash == hash);
+			latest = {seq, slot, hash};
+			if (changed || fresh) {
+				g_generation++;
+				log("net: opponent palette #%u char=%d slot=%d %s%s", seq, charId, slot, hash.hex().c_str(), fresh ? "" : " (already cached)");
+			}
+		}
+
 		void onPalette(const proto::PaletteChunk &chunk, const sockaddr_in &from)
 		{
 			if (!g_peerKnown || !sameAddr(from, g_peer))
@@ -154,13 +183,7 @@ namespace ps::net {
 			if (it == g_pending.end()) {
 				// Already have it: just acknowledge, so the sender stops resending.
 				if (cache.load(chunk.hash)) {
-					auto prev = g_remote.find(chunk.charId);
-					bool changed = prev == g_remote.end() || prev->second.slot != chunk.slot || !(prev->second.hash == chunk.hash);
-					g_remote[chunk.charId] = {chunk.slot, chunk.hash};
-					if (changed) {
-						g_generation++;
-						log("net: opponent palette char=%d slot=%d %s (already cached)", chunk.charId, chunk.slot, chunk.hash.hex().c_str());
-					}
+					remember(chunk.seq, chunk.charId, chunk.slot, chunk.hash, false);
 					sendTo(proto::makeAck(chunk.hash), from);
 					return;
 				}
@@ -171,13 +194,18 @@ namespace ps::net {
 							oldest = p;
 					g_pending.erase(oldest);
 				}
-				Pending p{chunk.charId, chunk.slot, std::vector<uint8_t>(chunk.totalSize), std::vector<bool>(chunk.totalSize), chunk.totalSize, GetTickCount64()};
+				Pending p{chunk.seq, chunk.charId, chunk.slot, std::vector<uint8_t>(chunk.totalSize), std::vector<bool>(chunk.totalSize), chunk.totalSize, GetTickCount64()};
 				it = g_pending.emplace(chunk.hash.bytes, std::move(p)).first;
 			}
 
 			auto &p = it->second;
 			if (p.data.size() != chunk.totalSize)
 				return;
+			if (chunk.seq > p.seq) {  // the same palette offered again (e.g. for another slot): keep the newest
+				p.seq = chunk.seq;
+				p.charId = chunk.charId;
+				p.slot = chunk.slot;
+			}
 			for (size_t i = 0; i < chunk.data.size(); i++) {
 				size_t at = chunk.offset + i;
 				if (!p.have[at]) {
@@ -190,6 +218,7 @@ namespace ps::net {
 				return;
 
 			auto palette = Palette::deserialize(p.data.data(), p.data.size());
+			uint32_t seq = p.seq;
 			int charId = p.charId, slot = p.slot;
 			g_pending.erase(it);
 			if (!palette || !(hashPalette(*palette) == chunk.hash)) {
@@ -197,9 +226,7 @@ namespace ps::net {
 				return;
 			}
 			cache.store(*palette, chunk.hash);
-			g_remote[charId] = {slot, chunk.hash};
-			g_generation++;
-			log("net: received opponent palette char=%d slot=%d %s", charId, slot, chunk.hash.hex().c_str());
+			remember(seq, charId, slot, chunk.hash, true);
 			sendTo(proto::makeAck(chunk.hash), from);
 		}
 
@@ -303,16 +330,26 @@ namespace ps::net {
 		if (g_offer && g_offer->charId == charId && g_offer->slot == slot && g_offer->hash == hash)
 			return;
 
-		Offer offer{charId, slot, hash, proto::makePalette(static_cast<uint16_t>(charId), static_cast<uint8_t>(slot), hash, palette.serialize())};
+		uint32_t seq = g_nextSeq++;
+		Offer offer{seq, charId, slot, hash, proto::makePalette(seq, static_cast<uint16_t>(charId), static_cast<uint8_t>(slot), hash, palette.serialize())};
 		g_offer = std::move(offer);
-		log("net: offering char=%d slot=%d %s", charId, slot, hash.hex().c_str());
+		log("net: offering #%u char=%d slot=%d %s", seq, charId, slot, hash.hex().c_str());
 	}
 
 	std::optional<PaletteHash> remotePalette(int charId, int slot)
 	{
 		std::lock_guard lock(g_mutex);
+		auto it = g_remoteBySlot.find({charId, slot});
+		if (it == g_remoteBySlot.end())
+			return std::nullopt;
+		return it->second.hash;
+	}
+
+	std::optional<PaletteHash> remoteShown(int charId)
+	{
+		std::lock_guard lock(g_mutex);
 		auto it = g_remote.find(charId);
-		if (it == g_remote.end() || it->second.slot != slot)
+		if (it == g_remote.end())
 			return std::nullopt;
 		return it->second.hash;
 	}
