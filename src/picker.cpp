@@ -554,11 +554,13 @@ namespace ps::picker {
 		__declspec(naked) void wheelSoundStub()
 		{
 			__asm {
+				pushad    // whatever runs next (the game, or another mod's hook here) sees the registers as they were
 				push ebp  // the side the select loop is on
 				push eax  // what moved (0x41FC70's result)
 				call onWheelSound
 				add esp, 8
 				test al, al
+				popad     // (leaves the flags alone)
 				jz skip
 				jmp g_origWheelSound  // playSEWaveBuffer(0x27), still on the stack
 			skip:

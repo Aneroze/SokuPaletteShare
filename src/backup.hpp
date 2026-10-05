@@ -8,9 +8,10 @@
 // The library is modules\PaletteShare\palettes\<character>\ (easy to find, shipped with the mod).
 // Its backup is <game folder>\PaletteShare\backup\<character>\, kept equal to it: new and changed
 // files are copied over, and files gone from the library are moved to backup\_removed\<character>\
-// (never deleted). A marker file in the library tells an installed library from a fresh one: when
-// it's missing (a new install, or a reinstall after removing the mod), the backup is copied back
-// first, newer files winning.
+// (never deleted: a name already there gets a number). A marker file in the library tells an
+// installed library from a fresh one: when it's missing (a new install, or a reinstall after
+// removing the mod), the backup is copied back first, newer files winning; if some file can't be
+// copied back, the marker isn't written (again next start) and nothing counts as deleted.
 //
 // Before 1.0.0, test builds kept the library in <game folder>\PaletteShare\palettes: its files are
 // brought into the mod folder once (newer files winning), and the folder becomes the backup.
@@ -34,7 +35,8 @@ namespace ps::backup {
 	// The parts, for the tests. Copies every character folder's files from `from` to `to` where
 	// `to` has no such file or an older one.
 	Stats restore(const std::filesystem::path &from, const std::filesystem::path &to);
-	// Makes `backup` (every character folder) equal to `library`, as described above.
-	Stats mirror(const std::filesystem::path &library, const std::filesystem::path &backup);
-	Stats mirrorCharacter(const std::filesystem::path &library, const std::filesystem::path &backup, const std::wstring &folderName);
+	// Makes `backup` (every character folder) equal to `library`, as described above; with
+	// moveGone false, files missing from the library stay in the backup.
+	Stats mirror(const std::filesystem::path &library, const std::filesystem::path &backup, bool moveGone = true);
+	Stats mirrorCharacter(const std::filesystem::path &library, const std::filesystem::path &backup, const std::wstring &folderName, bool moveGone = true);
 }

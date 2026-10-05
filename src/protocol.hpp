@@ -29,14 +29,18 @@ namespace ps::proto {
 
 	enum Kind : uint8_t {
 		KIND_HELLO = 1,   // u8 role (0 = player, 1 = spectator), u8 isReply, then (since 1.0.0) u8 min
-		                  // version, u8 max version, u8 length + the mod's version string. Both sides
-		                  // talk the highest version in both ranges; HELLO's own layout never changes.
+		                  // version, u8 max version, u8 length + the mod's version string, then (a reply
+		                  // to a spectator) u32 cookie. Both sides talk the highest version in both
+		                  // ranges; HELLO's known fields never change, new ones are appended.
 		KIND_PALETTE = 2, // u32 seq, u16 charId, u8 slot, u8[16] hash, u16 totalSize, u16 offset, u16 len, bytes
 		KIND_ACK = 3,     // u8[16] hash, u32 seq: which offer this confirms (offers in a row often share
 		                  // a palette while the wheel steps, so the hash alone could confirm the wrong one)
 		KIND_SIDE = 4,    // to a spectator: u8 side (0 left, 1 right), then PALETTE's payload: what that
 		                  // side's player is shown with; acknowledged with ACK. Test builds without it
 		                  // ignore unknown kinds (and spectator HELLOs), so it needs no new version.
+		KIND_JOIN = 5,    // spectator: u32 cookie from the HELLO reply. Proves the spectator gets our
+		                  // packets at its address before any palette goes there (a forged sender
+		                  // address never sees the cookie).
 	};
 
 	enum Role : uint8_t {
@@ -51,6 +55,7 @@ namespace ps::proto {
 		uint8_t minVersion;  // = version for peers that don't send a range
 		uint8_t maxVersion;
 		std::string modVersion;  // empty when not sent
+		uint32_t cookie = 0;     // a reply to a spectator: what its JOIN must carry (0 = none)
 	};
 
 	struct PaletteChunk {
@@ -66,7 +71,9 @@ namespace ps::proto {
 	// True when the datagram is ours (type + magic), whatever its version or kind.
 	bool isOurs(const uint8_t *data, size_t size);
 
-	std::vector<uint8_t> makeHello(Role role, bool isReply);
+	std::vector<uint8_t> makeHello(Role role, bool isReply, uint32_t cookie = 0);
+	std::vector<uint8_t> makeJoin(uint32_t cookie);
+	std::optional<uint32_t> parseJoin(const uint8_t *data, size_t size);
 	struct Ack {
 		PaletteHash hash;
 		uint32_t seq;  // 0 when the sender didn't say (never matches an offer)

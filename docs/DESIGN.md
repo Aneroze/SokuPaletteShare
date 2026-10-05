@@ -66,15 +66,21 @@ buffer is 1024 bytes, so palettes go in chunks of ≤900 bytes (16-bit: 1 packet
 - **PALETTE** `{seq, charId, slot, hash, totalSize, offset, len, bytes}`: our current palette,
   resent every 500 ms until acknowledged (max 60 times). `seq` numbers our offers, so a late or
   reordered datagram never replaces a newer offer. The receiver reassembles (max 4 in flight),
-  checks charId < 256, slot < 8, the sizes and the hash, caches it (max 32 new palettes per
-  session), and keeps the newest offer per character (character-select previews) and per
+  checks charId < 256, slot < 8, the sizes and the hash, caches it (max 256 new palettes per
+  character select; a palette equal to the slot's original doesn't count), and keeps the newest offer per character (character-select previews) and per
   character and slot (what the opponent loads with).
 - **SIDE** `{side, seq, charId, slot, hash, totalSize, offset, len, bytes}` (to spectators): what
   that side is shown with. A player node serves its own palette for its side and the opponent's
   raw offer for theirs; a spectator serves what it received, so relays work the same way. Sent at
-  each change (character load, a late palette) and to a spectator right after its HELLO, resent
-  every 500 ms until acknowledged (max 20 times, 4 while the spectator never acknowledged
-  anything: little traffic for a forged address). Up to 16 spectators per node.
+  each change (character load, a late palette) and to a spectator once it joined, resent every
+  500 ms until acknowledged (max 20 times). Up to 16 spectators per node; when full, one that never
+  joined makes room, joined ones are never dropped.
+- **Spectator handshake**: HELLO (role spectator) → HELLO reply with a random u32 cookie (at most
+  one reply per address per 500 ms; the same cookie until it joins) → **JOIN** `{cookie}` → palettes.
+  A forged sender address never sees the cookie, so it gets nothing but small HELLO replies (no
+  more than the game itself answers). A HELLO from a joined spectator starts over (new cookie).
+  A player node stops updating spectators from the opponent's offers at the next character select
+  (the loaded characters are history), so a lagging spectator never gets browsing palettes.
 - **ACK** `{hash, seq}`: confirms that one offer. Offers in a row often share a palette (the
   wheel stepping to the fallback slot re-offers it per slot), so an ACK by hash alone could confirm
   the final offer before it was sent. The local offer is also sent once more at character load.

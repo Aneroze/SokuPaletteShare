@@ -220,6 +220,19 @@ namespace {
 				CHECK(!proto::parsePalette(packet.data(), packet.size()));  // not mistaken for the opponent's
 			}
 		}
+		// The spectator handshake: the cookie rides on the HELLO reply, JOIN echoes it.
+		auto withCookie = proto::makeHello(proto::ROLE_PLAYER, true, 0xC0FFEE42);
+		auto parsedCookie = proto::parseHello(withCookie.data(), withCookie.size());
+		CHECK(parsedCookie && parsedCookie->isReply && parsedCookie->cookie == 0xC0FFEE42 && !parsedCookie->modVersion.empty());
+		auto plainHello = proto::makeHello(proto::ROLE_SPECTATOR, false);
+		auto parsedPlain = proto::parseHello(plainHello.data(), plainHello.size());
+		CHECK(parsedPlain && parsedPlain->cookie == 0 && parsedPlain->role == proto::ROLE_SPECTATOR);
+		auto join = proto::makeJoin(0xC0FFEE42);
+		CHECK(proto::parseJoin(join.data(), join.size()) == 0xC0FFEE42u);
+		auto zeroJoin = proto::makeJoin(0);
+		CHECK(!proto::parseJoin(zeroJoin.data(), zeroJoin.size()));  // 0 is "no cookie"
+		CHECK(!proto::parseJoin(join.data(), join.size() - 1));
+		CHECK(!proto::parseSide(join.data(), join.size()) && !proto::parseAck(join.data(), join.size()));
 		auto badSide = proto::makeSide(2, 1, 3, 0, hashPalette(p), p.serialize())[0];
 		CHECK(!proto::parseSide(badSide.data(), badSide.size()));  // only sides 0 and 1
 		std::vector<uint8_t> notOurs = {0x05, 'P', 'S', 'H', 'R', 2, 1};
@@ -314,6 +327,8 @@ namespace {
 			packets.push_back(chunk);
 		for (auto &chunk : proto::makeSide(1, 9, 3, 1, hashPalette(p16), p16.serialize()))
 			packets.push_back(chunk);
+		packets.push_back(proto::makeJoin(0x12345678));
+		packets.push_back(proto::makeHello(proto::ROLE_PLAYER, true, 0x12345678));
 		int accepted = 0;
 		for (int n = 0; n < 200000; n++) {
 			auto d = mutate(packets[rng.below(static_cast<uint32_t>(packets.size()))], rng);
@@ -326,6 +341,7 @@ namespace {
 					CHECK(c->side <= 1 && c->chunk.offset + c->chunk.data.size() <= c->chunk.totalSize && c->chunk.slot <= 7);
 				proto::parseHello(d.data(), d.size());
 				proto::parseAck(d.data(), d.size());
+				proto::parseJoin(d.data(), d.size());
 				Palette::deserialize(d.data(), d.size());
 			} catch (...) {
 				CHECK(!"a protocol parser threw");
@@ -439,6 +455,41 @@ namespace {
 		fs::remove(lib / L"sakuya" / L"Knife.pal");
 		backup::start(lib, bak, legacy);
 		CHECK(!has(lib / L"sakuya" / L"Knife.pal"));
+
+		// Deleted twice under the same name: both kept in _removed.
+		put(lib / L"reimu" / L"Twice.pal", "first");
+		backup::character(L"reimu");
+		fs::remove(lib / L"reimu" / L"Twice.pal");
+		backup::character(L"reimu");
+		put(lib / L"reimu" / L"Twice.pal", "second");
+		backup::character(L"reimu");
+		fs::remove(lib / L"reimu" / L"Twice.pal");
+		backup::character(L"reimu");
+		CHECK(read(bak / backup::REMOVED / L"reimu" / L"Twice.pal") == "first");
+		CHECK(read(bak / backup::REMOVED / L"reimu" / L"Twice (2).pal") == "second");
+
+		// A read-only palette: its backup copy doesn't stay read-only, so later edits still get there.
+		put(lib / L"reimu" / L"Locked.pal", "v1");
+		SetFileAttributesW((lib / L"reimu" / L"Locked.pal").c_str(), FILE_ATTRIBUTE_READONLY);
+		backup::character(L"reimu");
+		CHECK(!(GetFileAttributesW((bak / L"reimu" / L"Locked.pal").c_str()) & FILE_ATTRIBUTE_READONLY));
+		SetFileAttributesW((lib / L"reimu" / L"Locked.pal").c_str(), FILE_ATTRIBUTE_NORMAL);
+		put(lib / L"reimu" / L"Locked.pal", "v2");
+		backup::character(L"reimu");
+		CHECK(read(bak / L"reimu" / L"Locked.pal") == "v2");
+
+		// A reinstall where a palette can't be copied back (here a folder in its way): no marker (the
+		// next start tries again), and the backup keeps it.
+		fs::remove_all(root / L"modules");
+		fs::create_directories(lib / L"reimu" / L"Green.pal");  // a folder with the palette's name
+		backup::start(lib, bak, legacy);
+		CHECK(!has(lib / backup::MARKER));
+		CHECK(read(bak / L"reimu" / L"Green.pal") == "green" && !has(bak / backup::REMOVED / L"reimu" / L"Green.pal"));
+		backup::character(L"reimu");  // also not later in this run
+		CHECK(read(bak / L"reimu" / L"Green.pal") == "green");
+		fs::remove_all(lib / L"reimu" / L"Green.pal");
+		backup::start(lib, bak, legacy);  // next start: it comes back
+		CHECK(read(lib / L"reimu" / L"Green.pal") == "green" && has(lib / backup::MARKER));
 
 		// No backup (game folder not writable): the library still works and nothing is written.
 		fs::remove_all(root, ec);

@@ -258,7 +258,9 @@ namespace ps {
 			if (index != 1 || g_sides[0].charId != charId)
 				return false;
 			auto &first = g_sides[0];
-			return sameColors(first.showingCustom && first.custom ? *first.custom : first.vanilla, palette);
+			// What side 0 shows, or is about to (both sides' palettes arriving late, spectating).
+			bool custom = g_rebuilds[0].active ? g_rebuilds[0].toCustom : first.showingCustom;
+			return sameColors(custom && first.custom ? *first.custom : first.vanilla, palette);
 		}
 
 		void __fastcall onLoadCharacter(SokuLib::v2::Player *self, void *edx)

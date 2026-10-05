@@ -11,6 +11,7 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <random>
 #include <thread>
 
 // Transport: the game's UDP socket. Received datagrams are filtered in a hook on the game's
@@ -37,8 +38,9 @@ namespace ps::net {
 		constexpr uint8_t PLAY_REQUEST = 1;
 		constexpr uint8_t SPECTATE_REQUEST = 0;
 		constexpr size_t MAX_SPECTATORS = 16;        // modded spectators we serve at once
-		constexpr int SIDE_MAX_SENDS = 20;            // per palette and spectator, until acknowledged...
-		constexpr int SIDE_MAX_SENDS_UNANSWERED = 4;  // ...or this many while it never acknowledged anything
+		constexpr int SIDE_MAX_SENDS = 20;            // per palette and spectator, until acknowledged
+		constexpr ULONGLONG SPECTATOR_HELLO_GAP_MS = 500;  // at most one HELLO reply per address this often
+		constexpr int JOIN_MAX_SENDS = 20;            // spectating: JOIN until a palette arrives
 		constexpr ULONGLONG SPECTATE_REQUEST_TTL_MS = 30 * 60 * 1000;
 		constexpr ULONGLONG NO_MOD_AFTER_MS = 3000;  // no HELLO by then: show "they don't have it"
 
@@ -124,10 +126,14 @@ namespace ps::net {
 			int sends = 0;
 			ULONGLONG nextSend = 0;
 		};
+		// A spectator gets palettes only once it echoed the cookie of our HELLO reply (JOIN): then we
+		// know our packets reach it at that address. Until then it costs one small reply per HELLO.
 		struct Spectator {
 			sockaddr_in addr;
 			ULONGLONG since;
-			bool answered = false;  // acknowledged something: it's really there
+			uint32_t cookie = 0;
+			ULONGLONG lastReply = 0;
+			bool joined = false;
 			Push sides[2];
 		};
 		std::vector<Spectator> g_spectators;
@@ -148,6 +154,10 @@ namespace ps::net {
 		ULONGLONG g_nextUpstreamHello = 0;
 		RemoteEntry g_watched[2];
 		int g_watchedChar[2] = {-1, -1};
+		uint32_t g_joinCookie = 0;  // from upstream's HELLO reply
+		int g_joinSends = 0;
+		ULONGLONG g_nextJoin = 0;
+		bool g_gotSide = false;
 
 		std::atomic<unsigned> g_generation = 0;
 		std::atomic<bool> g_stop = false;
@@ -258,6 +268,10 @@ namespace ps::net {
 			g_upstream = {};
 			g_upstreamTries = 0;
 			g_nextUpstreamHello = 0;
+			g_joinCookie = 0;
+			g_joinSends = 0;
+			g_nextJoin = 0;
+			g_gotSide = false;
 			for (int side = 0; side < 2; side++) {
 				g_watched[side] = RemoteEntry{};
 				g_watchedChar[side] = -1;
@@ -301,7 +315,8 @@ namespace ps::net {
 				return;
 			shown = Shown{++g_shownSeq, charId, slot, hash, std::move(bytes)};
 			for (auto &spectator : g_spectators)
-				queuePush(spectator, side);
+				if (spectator.joined)
+					queuePush(spectator, side);
 			if (!g_spectators.empty())
 				log("net: spectators get side %d: char=%d slot=%d %s", side, charId, slot, hash.hex().c_str());
 		}
@@ -335,6 +350,16 @@ namespace ps::net {
 			return false;
 		}
 
+		uint32_t newCookie()
+		{
+			static std::random_device random;  // rand_s: unpredictable, so a forged address can't guess it
+			uint32_t cookie;
+			do
+				cookie = random();
+			while (!cookie);
+			return cookie;
+		}
+
 		void onSpectatorHello(const proto::Hello &hello, const sockaddr_in &from)
 		{
 			if (!askedToSpectate(from)) {
@@ -345,24 +370,46 @@ namespace ps::net {
 			uint8_t common = (std::min)(proto::VERSION, hello.maxVersion);
 			if (common < (std::max)(proto::MIN_VERSION, hello.minVersion))
 				return;  // can't talk to it: it sees the slots
+			auto now = GetTickCount64();
 			auto spectator = spectatorAt(from);
 			if (!spectator) {
 				if (g_spectators.size() >= MAX_SPECTATORS) {
-					auto oldest = g_spectators.begin();
+					// Make room by dropping the oldest one that never joined; joined ones stay.
+					auto drop = g_spectators.end();
 					for (auto it = g_spectators.begin(); it != g_spectators.end(); ++it)
-						if (it->since < oldest->since)
-							oldest = it;
-					g_spectators.erase(oldest);
+						if (!it->joined && (drop == g_spectators.end() || it->since < drop->since))
+							drop = it;
+					if (drop == g_spectators.end())
+						return;  // all taken by spectators that joined
+					g_spectators.erase(drop);
 				}
-				g_spectators.push_back(Spectator{from, GetTickCount64()});
+				g_spectators.push_back(Spectator{from, now});
 				spectator = &g_spectators.back();
 				log("net: spectator %s has PaletteShare %s", addressText(from).c_str(), hello.modVersion.empty() ? "(old)" : hello.modVersion.c_str());
 			}
-			sendTo(proto::makeHello(g_watching ? proto::ROLE_SPECTATOR : proto::ROLE_PLAYER, true), from);
-			for (int side = 0; side < 2; side++) {
-				spectator->sides[side].seq = 0;  // (again) everything we have
-				queuePush(*spectator, side);
+			if (now - spectator->lastReply < SPECTATOR_HELLO_GAP_MS)
+				return;
+			spectator->lastReply = now;
+			// A HELLO after it joined means it starts over (e.g. it watches again): a new cookie, and
+			// palettes again after its JOIN. Before that, the same cookie (a HELLO may be resent).
+			if (spectator->joined || !spectator->cookie) {
+				spectator->cookie = newCookie();
+				spectator->joined = false;
+				for (auto &push : spectator->sides)
+					push = Push{};
 			}
+			sendTo(proto::makeHello(g_watching ? proto::ROLE_SPECTATOR : proto::ROLE_PLAYER, true, spectator->cookie), from);
+		}
+
+		void onJoin(uint32_t cookie, const sockaddr_in &from)
+		{
+			auto spectator = spectatorAt(from);
+			if (!spectator || spectator->joined || spectator->cookie != cookie)
+				return;
+			spectator->joined = true;
+			log("net: spectator %s joined", addressText(from).c_str());
+			for (int side = 0; side < 2; side++)
+				queuePush(*spectator, side);
 		}
 
 		// Spectating: a side's palette from upstream, complete and verified (in the cache).
@@ -405,13 +452,20 @@ namespace ps::net {
 				return;
 			}
 			if (g_watching) {
-				// The node we watch through answered.
+				// The node we watch through answered: prove we're here with its cookie.
 				auto upstream = hostAddress();
-				if (hello.isReply && upstream && sameAddr(from, *upstream) && !g_upstreamKnown) {
-					g_upstreamKnown = true;
-					g_upstream = from;
+				if (!hello.isReply || !hello.cookie || !upstream || !sameAddr(from, *upstream))
+					return;
+				if (!g_upstreamKnown)
 					log("net: watching through %s, which has PaletteShare %s", addressText(from).c_str(),
 						hello.modVersion.empty() ? "(old)" : hello.modVersion.c_str());
+				g_upstreamKnown = true;
+				g_upstream = from;
+				if (hello.cookie != g_joinCookie) {  // the latest one counts
+					g_joinCookie = hello.cookie;
+					g_gotSide = false;
+					g_joinSends = 0;
+					g_nextJoin = 0;
 				}
 				return;
 			}
@@ -550,6 +604,7 @@ namespace ps::net {
 			auto upstream = hostAddress();
 			if (!g_watching || !upstream || !sameAddr(from, *upstream))
 				return;
+			g_gotSide = true;  // it got our JOIN
 			auto &chunk = sideChunk.chunk;
 			int side = sideChunk.side;
 			// Keyed by hash and side: both sides may share a palette.
@@ -614,7 +669,6 @@ namespace ps::net {
 					auto &push = spectator->sides[side];
 					if (push.seq == ack.seq && push.hash == ack.hash && !push.acked) {
 						push.acked = true;
-						spectator->answered = true;
 						log("net: spectator %s has side %d's palette", addressText(from).c_str(), side);
 					}
 				}
@@ -648,6 +702,8 @@ namespace ps::net {
 				onPalette(*chunk, from);
 			else if (auto side = proto::parseSide(data, size))
 				onSide(*side, from);
+			else if (auto cookie = proto::parseJoin(data, size))
+				onJoin(*cookie, from);
 			else if (auto ack = proto::parseAck(data, size))
 				onAck(*ack, from);
 		}
@@ -714,8 +770,7 @@ namespace ps::net {
 		{
 			for (auto &spectator : g_spectators)
 				for (auto &push : spectator.sides) {
-					int limit = spectator.answered ? SIDE_MAX_SENDS : SIDE_MAX_SENDS_UNANSWERED;
-					if (push.acked || push.sends >= limit || now < push.nextSend)
+					if (!spectator.joined || push.acked || push.sends >= SIDE_MAX_SENDS || now < push.nextSend)
 						continue;
 					for (auto &packet : push.packets)
 						sendTo(packet, spectator.addr);
@@ -754,8 +809,11 @@ namespace ps::net {
 			g_lastScene = scene;
 			if (newSelect) {
 				// Each character select starts fresh: a lost handshake gets another chance (per
-				// rematch), and the new-palette count starts over.
+				// rematch), and the new-palette count starts over. The loaded characters are history:
+				// what the opponent browses now mustn't reach spectators still watching the last match.
 				g_newPalettes = 0;
+				for (auto &loaded : g_loaded)
+					loaded = Loaded{};
 				if (!g_peerKnown && (g_helloTries > 0 || g_peerIncompatible)) {
 					g_helloTries = 0;
 					g_peerIncompatible = false;
@@ -776,6 +834,12 @@ namespace ps::net {
 						if (g_upstreamTries == HELLO_MAX_TRIES)
 							log("net: no answer; the game we watch has no PaletteShare (or an older one)");
 					}
+				}
+				// JOIN until a palette arrives (it may have none yet: then our JOIN is all it needs).
+				if (g_upstreamKnown && !g_gotSide && g_joinSends < JOIN_MAX_SENDS && now >= g_nextJoin) {
+					sendTo(proto::makeJoin(g_joinCookie), g_upstream);
+					g_joinSends++;
+					g_nextJoin = now + HELLO_INTERVAL_MS;
 				}
 				return;
 			}

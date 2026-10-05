@@ -68,9 +68,12 @@ the palette menu.
 
 ### Backup details
 
-The backup is updated at startup and whenever a character's palettes change. It includes
+The backup is updated at startup and whenever the game reads a character's palettes (its palette
+step or the palette menu), and when you change a fallback. It includes
 `palettes.ini`, which holds the fallbacks. After a reinstall, the first start copies it back, and
-newer files win. Palettes you delete are moved to `backup\_removed\`, never deleted. To remove them
+newer files win. Palettes you delete are moved to `backup\_removed\`, never deleted (a name that's already
+there gets a number). If a palette can't be copied back (e.g. it's open in another program), the
+next start tries again, and nothing counts as deleted until then. To remove them
 for good, delete the `backup` folder too. Updating the mod never touches your palettes. If the game
 folder can't be written to, there's no backup, and the log says so. Libraries of earlier test builds
 (`PaletteShare\palettes` in the game folder) are brought over once and become the backup.

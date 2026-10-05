@@ -11,6 +11,7 @@ namespace ps::backup {
 
 	namespace {
 		fs::path g_library, g_backup;  // g_backup empty: no backup
+		bool g_moveGone = true;         // false after a restore that failed (this run)
 
 		std::wstring lower(std::wstring s)
 		{
@@ -62,12 +63,22 @@ namespace ps::backup {
 			return !e1 && !e2 && !e3 && !e4 && sizeA == sizeB && timeA == timeB;
 		}
 
+		// A read-only copy couldn't be replaced later (CopyFile copies the attribute along).
+		void makeWritable(const fs::path &file)
+		{
+			DWORD attributes = GetFileAttributesW(file.c_str());
+			if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY))
+				SetFileAttributesW(file.c_str(), attributes & ~FILE_ATTRIBUTE_READONLY);
+		}
+
 		void copy(const fs::path &from, const fs::path &to, Stats &stats)
 		{
 			std::error_code ec;
 			fs::create_directories(to.parent_path(), ec);
+			makeWritable(to);
 			// Keeps the file's time (CopyFile), which is how both sides tell changed files.
 			if (fs::copy_file(from, to, fs::copy_options::overwrite_existing, ec) && !ec) {
+				makeWritable(to);
 				stats.copied++;
 				return;
 			}
@@ -79,8 +90,10 @@ namespace ps::backup {
 		{
 			std::error_code ec;
 			fs::create_directories(removedDir, ec);
+			// Never over an earlier removed file of the same name: "Red (2).pal", "Red (3).pal"...
 			auto target = removedDir / file.filename();
-			fs::remove(target, ec);  // an older removed copy of the same name
+			for (int n = 2; fs::exists(target, ec) && n < 10000; n++)
+				target = removedDir / (file.stem().wstring() + L" (" + std::to_wstring(n) + L")" + file.extension().wstring());
 			fs::rename(file, target, ec);
 			if (!ec) {
 				stats.removed++;
@@ -129,7 +142,7 @@ namespace ps::backup {
 		return stats;
 	}
 
-	Stats mirrorCharacter(const fs::path &library, const fs::path &backup, const std::wstring &folderName)
+	Stats mirrorCharacter(const fs::path &library, const fs::path &backup, const std::wstring &folderName, bool moveGone)
 	{
 		Stats stats;
 		std::map<std::wstring, fs::path> files, copies;
@@ -143,13 +156,14 @@ namespace ps::backup {
 			else if (!same(file, it->second))
 				copy(file, it->second, stats);
 		}
-		for (auto &[key, file] : copies)
-			if (!files.count(key))
-				moveAside(file, backup / REMOVED / folderName, stats);
+		if (moveGone)
+			for (auto &[key, file] : copies)
+				if (!files.count(key))
+					moveAside(file, backup / REMOVED / folderName, stats);
 		return stats;
 	}
 
-	Stats mirror(const fs::path &library, const fs::path &backup)
+	Stats mirror(const fs::path &library, const fs::path &backup, bool moveGone)
 	{
 		Stats stats;
 		std::set<std::wstring> characters;
@@ -157,7 +171,7 @@ namespace ps::backup {
 			return stats;
 		characterFolders(backup, characters);  // and folders gone from the library
 		for (auto &name : characters)
-			add(stats, mirrorCharacter(library, backup, name));
+			add(stats, mirrorCharacter(library, backup, name, moveGone));
 		return stats;
 	}
 
@@ -191,11 +205,15 @@ namespace ps::backup {
 
 		auto marker = library / MARKER;
 		bool fresh = !fs::exists(marker, ec);
+		bool restoreFailed = false;
 		if (fresh && !backupRoot.empty() && fs::is_directory(backupRoot, ec)) {
 			auto restored = restore(backupRoot, library);
 			log("backup: new install, %d file(s) restored from %ls (%d failed)", restored.copied, backupRoot.c_str(), restored.failed);
+			// Some didn't come back (e.g. open in another program): try again next start, and until
+			// then nothing in the backup counts as deleted.
+			restoreFailed = restored.failed > 0;
 		}
-		if (fresh)
+		if (fresh && !restoreFailed)
 			writeText(marker,
 				"PaletteShare: this palette library is set up and backed up to <game folder>\\PaletteShare\\backup.\r\n"
 				"Without this file, PaletteShare takes it for a new install and first copies the backup back here.\r\n");
@@ -205,7 +223,7 @@ namespace ps::backup {
 			return;
 		}
 		fs::create_directories(backupRoot, ec);
-		auto stats = mirror(library, backupRoot);
+		auto stats = mirror(library, backupRoot, !restoreFailed);
 		log("backup: %ls: %d file(s) copied, %d moved to %ls (%d failed)", backupRoot.c_str(), stats.copied, stats.removed, REMOVED, stats.failed);
 		auto readme = backupRoot / L"README.txt";
 		if (!fs::exists(readme, ec))
@@ -217,13 +235,14 @@ namespace ps::backup {
 				"- Palettes you delete there are moved to _removed here, never deleted.\r\n"
 				"- To get rid of them for good (e.g. before a clean reinstall), delete this folder.\r\n");
 		g_backup = backupRoot;
+		g_moveGone = !restoreFailed;
 	}
 
 	void character(const std::wstring &folderName)
 	{
 		if (g_backup.empty() || folderName.empty())
 			return;
-		auto stats = mirrorCharacter(g_library, g_backup, folderName);
+		auto stats = mirrorCharacter(g_library, g_backup, folderName, g_moveGone);
 		if (stats.copied || stats.removed || stats.failed)
 			log("backup: %ls: %d file(s) copied, %d moved to %ls (%d failed)", folderName.c_str(), stats.copied, stats.removed, REMOVED, stats.failed);
 	}

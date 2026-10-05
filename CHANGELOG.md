@@ -14,7 +14,8 @@
 - Spectators: spectators with PaletteShare see both players' custom palettes (on time at the
   loading screen, also when joining mid-match). Whichever game they watch through, a player or a
   spectator relaying the match, sends them what each side is shown with; only addresses that asked
-  the game to spectate are answered. New packet kind SIDE (protocol v2; builds without it ignore it).
+  the game to spectate are answered, and only after echoing a random cookie (no traffic towards a
+  forged address). New packet kinds SIDE and JOIN (protocol v2; builds without them ignore them).
 - Your palettes live in the mod folder again, `modules\PaletteShare\palettes\<character>\` (shipped
   in the zip with a README, so it's there before the first start), and PaletteShare keeps a copy in
   `<game folder>\PaletteShare\backup`: removing the mod and installing it again brings them back,

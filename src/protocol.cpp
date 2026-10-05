@@ -72,7 +72,7 @@ namespace ps::proto {
 		return data[6];
 	}
 
-	std::vector<uint8_t> makeHello(Role role, bool isReply)
+	std::vector<uint8_t> makeHello(Role role, bool isReply, uint32_t cookie)
 	{
 		Writer w(KIND_HELLO);
 		w.u8(role);
@@ -82,7 +82,27 @@ namespace ps::proto {
 		const char *mod = PALETTESHARE_VERSION;
 		w.u8(static_cast<uint8_t>(strlen(mod)));
 		w.bytes(reinterpret_cast<const uint8_t *>(mod), strlen(mod));
+		if (cookie)
+			w.u32(cookie);
 		return w.take();
+	}
+
+	std::vector<uint8_t> makeJoin(uint32_t cookie)
+	{
+		Writer w(KIND_JOIN);
+		w.u32(cookie);
+		return w.take();
+	}
+
+	std::optional<uint32_t> parseJoin(const uint8_t *data, size_t size)
+	{
+		if (kindOf(data, size) != KIND_JOIN)
+			return std::nullopt;
+		Reader r(data, size);
+		uint32_t cookie;
+		if (!r.u32(cookie) || !cookie)
+			return std::nullopt;
+		return cookie;
 	}
 
 	std::vector<uint8_t> makeAck(const PaletteHash &hash, uint32_t seq)
@@ -168,6 +188,7 @@ namespace ps::proto {
 				for (auto &c : hello.modVersion)
 					if (c < 0x20 || c > 0x7E)
 						c = '?';  // only for logs
+				r.u32(hello.cookie);  // optional: stays 0
 			}
 		}
 		return hello;
