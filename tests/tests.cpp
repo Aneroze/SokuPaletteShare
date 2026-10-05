@@ -175,11 +175,8 @@ namespace {
 		auto parsed = proto::parseHello(hello.data(), hello.size());
 		CHECK(parsed && parsed->isReply && parsed->role == proto::ROLE_PLAYER);
 		CHECK(parsed && parsed->minVersion == proto::MIN_VERSION && parsed->maxVersion == proto::VERSION && parsed->modVersion == PALETTESHARE_VERSION);
-		// A peer that doesn't send a range (protocol v1/v2 before 1.0.0): it speaks its header version.
-		std::vector<uint8_t> old(hello.begin(), hello.begin() + proto::HEADER_SIZE + 2);
-		old[5] = 1;
-		auto parsedOld = proto::parseHello(old.data(), old.size());
-		CHECK(parsedOld && parsedOld->minVersion == 1 && parsedOld->maxVersion == 1 && parsedOld->modVersion.empty());
+		std::vector<uint8_t> noRange(hello.begin(), hello.begin() + proto::HEADER_SIZE + 2);
+		CHECK(!proto::parseHello(noRange.data(), noRange.size()));  // test builds before 1.0.0
 
 		for (uint8_t bpp : {16, 32}) {
 			auto p = testPalette(bpp, 5);
@@ -206,8 +203,7 @@ namespace {
 		auto parsedAck = proto::parseAck(ack.data(), ack.size());
 		CHECK(parsedAck && parsedAck->hash == hashPalette(p) && parsedAck->seq == 77);
 		std::vector<uint8_t> oldAck(ack.begin(), ack.end() - 4);  // without the offer number
-		auto parsedOldAck = proto::parseAck(oldAck.data(), oldAck.size());
-		CHECK(parsedOldAck && parsedOldAck->seq == 0);
+		CHECK(!proto::parseAck(oldAck.data(), oldAck.size()));
 		// Spectators: a side's palette.
 		for (uint8_t side : {0, 1}) {
 			auto p32 = testPalette(32, 6);
@@ -369,7 +365,6 @@ namespace {
 		std::error_code ec;
 		fs::remove_all(root, ec);
 		auto lib = root / L"modules" / L"PaletteShare" / L"palettes", bak = root / L"PaletteShare" / L"backup";
-		auto legacy = root / L"PaletteShare" / L"palettes";
 		auto put = [](const fs::path &file, const std::string &text, int ageSeconds = 0) {
 			fs::create_directories(file.parent_path());
 			{ std::ofstream(file, std::ios::binary) << text; }
@@ -382,16 +377,13 @@ namespace {
 		};
 		auto has = [](const fs::path &file) { std::error_code e; return fs::exists(file, e); };
 
-		// An old test build's library, settings newer than the mod folder's, and a mod folder palette.
-		put(legacy / L"reimu" / L"Blue.pal", "blue");
-		put(legacy / L"reimu" / L"palettes.ini", "new settings", 10);
-		put(lib / L"reimu" / L"palettes.ini", "old settings", 100);
+		// A first start: everything gets backed up.
+		put(lib / L"reimu" / L"Blue.pal", "blue");
+		put(lib / L"reimu" / L"palettes.ini", "settings");
 		put(lib / L"reimu" / L"Mine.pal", "mine");
-		backup::start(lib, bak, legacy);
-		CHECK(read(lib / L"reimu" / L"Blue.pal") == "blue");
-		CHECK(read(lib / L"reimu" / L"palettes.ini") == "new settings");  // the newer one
-		CHECK(!has(legacy) && has(bak / L"reimu" / L"Blue.pal"));        // it became the backup
-		CHECK(read(bak / L"reimu" / L"Mine.pal") == "mine");             // and got the rest
+		backup::start(lib, bak);
+		CHECK(read(bak / L"reimu" / L"Blue.pal") == "blue" && read(bak / L"reimu" / L"palettes.ini") == "settings");
+		CHECK(read(bak / L"reimu" / L"Mine.pal") == "mine");
 		CHECK(has(lib / backup::MARKER) && has(bak / L"README.txt"));
 
 		// Added, changed and deleted palettes.
@@ -408,27 +400,19 @@ namespace {
 		put(lib / L"marisa" / L"Star.pal", "star");
 		backup::character(L"marisa");
 		fs::remove_all(lib / L"marisa");
-		backup::start(lib, bak, legacy);
+		backup::start(lib, bak);
 		CHECK(!has(lib / L"marisa" / L"Star.pal") && !has(lib / L"reimu" / L"Blue.pal"));
 		CHECK(read(bak / backup::REMOVED / L"marisa" / L"Star.pal") == "star");
 
 		// Removed and installed again: everything comes back, the zip's (newer) files stay.
 		fs::remove_all(root / L"modules");
 		put(lib / L"reimu" / L"Mine.pal", "from the zip");
-		backup::start(lib, bak, legacy);
+		backup::start(lib, bak);
 		CHECK(read(lib / L"reimu" / L"Green.pal") == "green");
-		CHECK(read(lib / L"reimu" / L"palettes.ini") == "new settings");
+		CHECK(read(lib / L"reimu" / L"palettes.ini") == "settings");
 		CHECK(read(lib / L"reimu" / L"Mine.pal") == "from the zip");
 		CHECK(!has(lib / L"reimu" / L"Blue.pal") && !has(lib / L"marisa" / L"Star.pal"));
 		CHECK(has(lib / backup::MARKER));
-
-		// An old library next to an existing backup: brought over once, then left alone.
-		put(legacy / L"sakuya" / L"Knife.pal", "knife");
-		backup::start(lib, bak, legacy);
-		CHECK(read(lib / L"sakuya" / L"Knife.pal") == "knife" && has(legacy / L".moved"));
-		fs::remove(lib / L"sakuya" / L"Knife.pal");
-		backup::start(lib, bak, legacy);
-		CHECK(!has(lib / L"sakuya" / L"Knife.pal"));
 
 		// Deleted twice under the same name: both kept in _removed.
 		put(lib / L"reimu" / L"Twice.pal", "first");
@@ -456,19 +440,19 @@ namespace {
 		// next start tries again), and the backup keeps it.
 		fs::remove_all(root / L"modules");
 		fs::create_directories(lib / L"reimu" / L"Green.pal");  // a folder with the palette's name
-		backup::start(lib, bak, legacy);
+		backup::start(lib, bak);
 		CHECK(!has(lib / backup::MARKER));
 		CHECK(read(bak / L"reimu" / L"Green.pal") == "green" && !has(bak / backup::REMOVED / L"reimu" / L"Green.pal"));
 		backup::character(L"reimu");  // also not later in this run
 		CHECK(read(bak / L"reimu" / L"Green.pal") == "green");
 		fs::remove_all(lib / L"reimu" / L"Green.pal");
-		backup::start(lib, bak, legacy);  // next start: it comes back
+		backup::start(lib, bak);  // next start: it comes back
 		CHECK(read(lib / L"reimu" / L"Green.pal") == "green" && has(lib / backup::MARKER));
 
 		// No backup (game folder not writable): the library still works and nothing is written.
 		fs::remove_all(root, ec);
 		put(lib / L"reimu" / L"Mine.pal", "mine");
-		backup::start(lib, fs::path(), fs::path());
+		backup::start(lib, fs::path());
 		CHECK(has(lib / backup::MARKER) && !has(bak));
 		backup::character(L"reimu");
 		CHECK(!has(bak));

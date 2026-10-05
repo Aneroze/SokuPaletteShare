@@ -177,20 +177,17 @@ namespace ps::proto {
 		if (!r.u8(role) || !r.u8(reply))
 			return std::nullopt;
 		// Newer versions may append fields; only the ones we know are read.
-		Hello hello{data[5], static_cast<Role>(role), reply != 0, data[5], data[5], {}};
-		uint8_t lo, hi, length;
-		if (r.u8(lo) && r.u8(hi) && lo <= hi) {
-			hello.minVersion = lo;
-			hello.maxVersion = hi;
-			char mod[256];
-			if (r.u8(length) && r.bytes(reinterpret_cast<uint8_t *>(mod), length)) {
-				hello.modVersion.assign(mod, length);
-				for (auto &c : hello.modVersion)
-					if (c < 0x20 || c > 0x7E)
-						c = '?';  // only for logs
-				r.u32(hello.cookie);  // optional: stays 0
-			}
-		}
+		Hello hello{data[5], static_cast<Role>(role), reply != 0, 0, 0, {}};
+		uint8_t length;
+		char mod[256];
+		if (!r.u8(hello.minVersion) || !r.u8(hello.maxVersion) || hello.minVersion > hello.maxVersion ||
+		    !r.u8(length) || !r.bytes(reinterpret_cast<uint8_t *>(mod), length))
+			return std::nullopt;
+		hello.modVersion.assign(mod, length);
+		for (auto &c : hello.modVersion)
+			if (c < 0x20 || c > 0x7E)
+				c = '?';  // only for logs
+		r.u32(hello.cookie);  // optional: stays 0
 		return hello;
 	}
 
@@ -223,9 +220,8 @@ namespace ps::proto {
 
 		Reader r(data, size);
 		Ack ack{{}, 0};
-		if (!r.bytes(ack.hash.bytes.data(), ack.hash.bytes.size()))
+		if (!r.bytes(ack.hash.bytes.data(), ack.hash.bytes.size()) || !r.u32(ack.seq))
 			return std::nullopt;
-		r.u32(ack.seq);  // absent from older builds: stays 0
 		return ack;
 	}
 

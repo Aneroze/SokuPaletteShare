@@ -57,7 +57,7 @@ buffer is 1024 bytes, so palettes go in chunks of ≤900 bytes (16-bit: 1 packet
 
 - **HELLO** `{role, isReply, minVersion, maxVersion, modVersion}`: the client sends it to the host
   every 500 ms (up to 40 times) when a netplay session starts; the host replies. Both talk the
-  highest version in both ranges (peers that don't send a range speak just their header version),
+  highest version in both ranges,
   re-checked on every HELLO; HELLO's own layout never changes. Only the game's opponent is
   accepted: the client checks the host's address, the host an address that asked the game to play
   (INIT_REQUEST with PLAY_REQU) in the last 60 s; spectators ask to spectate and aren't counted.

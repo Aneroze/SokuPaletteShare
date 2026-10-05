@@ -131,7 +131,7 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 	ps::log("library: %ls, backup: %ls", library.c_str(), data.empty() ? L"none (the game folder isn't writable)" : (data / L"backup").c_str());
 	ps::setLibraryRoot(library);
 	ps::guarded("palette backup", [&] {
-		ps::backup::start(library, data.empty() ? std::filesystem::path() : data / L"backup", modulePath(nullptr) / L"PaletteShare" / L"palettes");
+		ps::backup::start(library, data.empty() ? std::filesystem::path() : data / L"backup");
 	});
 	loadConfig(ini);
 	ps::installHooks();

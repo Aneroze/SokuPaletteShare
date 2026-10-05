@@ -175,7 +175,7 @@ namespace ps::backup {
 		return stats;
 	}
 
-	void start(const fs::path &library, const fs::path &backupRoot, const fs::path &legacyLibrary)
+	void start(const fs::path &library, const fs::path &backupRoot)
 	{
 		std::error_code ec;
 		fs::create_directories(library, ec);
@@ -183,26 +183,6 @@ namespace ps::backup {
 		g_backup.clear();  // set once the backup is up to date
 
 		// Test builds before 1.0.0: their library comes here, and it becomes the backup.
-		// Only once: palettes deleted from the library later mustn't come back from it.
-		auto legacyDone = legacyLibrary / L".moved";
-		if (!legacyLibrary.empty() && fs::is_directory(legacyLibrary, ec) && !fs::exists(legacyDone, ec)) {
-			auto moved = restore(legacyLibrary, library);
-			log("backup: %d file(s) brought over from the old library %ls (%d failed)", moved.copied, legacyLibrary.c_str(), moved.failed);
-			if (!moved.failed) {  // otherwise again next time
-				std::error_code renamed;
-				if (!backupRoot.empty() && !fs::exists(backupRoot, ec))
-					fs::rename(legacyLibrary, backupRoot, renamed);
-				else
-					renamed = std::make_error_code(std::errc::file_exists);
-				if (!renamed) {
-					log("backup: the old library is now the backup");
-				} else {
-					writeText(legacyDone, "PaletteShare: these palettes were copied to modules\\PaletteShare\\palettes, which is the library now.\r\n");
-					log("backup: the old library stays where it is, marked as brought over");
-				}
-			}
-		}
-
 		auto marker = library / MARKER;
 		bool fresh = !fs::exists(marker, ec);
 		bool restoreFailed = false;

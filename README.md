@@ -75,8 +75,7 @@ newer files win. Palettes you delete are moved to `backup\_removed\`, never dele
 there gets a number). If a palette can't be copied back (e.g. it's open in another program), the
 next start tries again, and nothing counts as deleted until then. To remove them
 for good, delete the `backup` folder too. Updating the mod never touches your palettes. If the game
-folder can't be written to, there's no backup, and the log says so. Libraries of earlier test builds
-(`PaletteShare\palettes` in the game folder) are brought over once and become the backup.
+folder can't be written to, there's no backup, and the log says so.
 
 ## Replays
 

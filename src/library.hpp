@@ -15,7 +15,7 @@
 //
 //   [default]
 //   fallback=0               ; slot used by palettes that have no fallback of their own (default 0)
-//   [palette:Blue Reimu]     ; file name without extension (before 1.0.0: [Blue Reimu], still read)
+//   [palette:Blue Reimu]     ; file name without extension
 //   fallback=3
 //   [last] / [last2p]        ; the last choice of player 1 (our side online) / player 2 offline
 //

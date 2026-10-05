@@ -28,8 +28,8 @@ namespace ps::proto {
 	constexpr uint16_t MAX_CHARACTER_ID = 256;  // the game's are 0-20; room for modded characters
 
 	enum Kind : uint8_t {
-		KIND_HELLO = 1,   // u8 role (0 = player, 1 = spectator), u8 isReply, then (since 1.0.0) u8 min
-		                  // version, u8 max version, u8 length + the mod's version string, then (a reply
+		KIND_HELLO = 1,   // u8 role (0 = player, 1 = spectator), u8 isReply, u8 min version, u8 max
+		                  // version, u8 length + the mod's version string, then (a reply
 		                  // to a spectator) u32 cookie. Both sides talk the highest version in both
 		                  // ranges; HELLO's known fields never change, new ones are appended.
 		KIND_PALETTE = 2, // u32 seq, u16 charId, u8 slot, u8[16] hash, u16 totalSize, u16 offset, u16 len, bytes
@@ -52,9 +52,9 @@ namespace ps::proto {
 		uint8_t version;     // the header's
 		Role role;
 		bool isReply;
-		uint8_t minVersion;  // = version for peers that don't send a range
+		uint8_t minVersion;
 		uint8_t maxVersion;
-		std::string modVersion;  // empty when not sent
+		std::string modVersion;
 		uint32_t cookie = 0;     // a reply to a spectator: what its JOIN must carry (0 = none)
 	};
 
@@ -76,7 +76,7 @@ namespace ps::proto {
 	std::optional<uint32_t> parseJoin(const uint8_t *data, size_t size);
 	struct Ack {
 		PaletteHash hash;
-		uint32_t seq;  // 0 when the sender didn't say (never matches an offer)
+		uint32_t seq;
 	};
 	std::vector<uint8_t> makeAck(const PaletteHash &hash, uint32_t seq);
 	// Splits the serialized palette into chunk packets.

@@ -12,9 +12,6 @@
 // installed library from a fresh one: when it's missing (a new install, or a reinstall after
 // removing the mod), the backup is copied back first, newer files winning; if some file can't be
 // copied back, the marker isn't written (again next start) and nothing counts as deleted.
-//
-// Before 1.0.0, test builds kept the library in <game folder>\PaletteShare\palettes: its files are
-// brought into the mod folder once (newer files winning), and the folder becomes the backup.
 namespace ps::backup {
 	struct Stats {
 		int copied = 0;    // files copied
@@ -25,10 +22,9 @@ namespace ps::backup {
 	constexpr const wchar_t *MARKER = L".paletteshare";
 	constexpr const wchar_t *REMOVED = L"_removed";
 
-	// At startup: migrate an old library, restore a fresh library from the backup, then back up the
-	// whole library. `backupRoot` empty = no backup (the game folder isn't writable).
-	void start(const std::filesystem::path &library, const std::filesystem::path &backupRoot,
-		const std::filesystem::path &legacyLibrary);
+	// At startup: restore a fresh library from the backup, then back up the whole library.
+	// `backupRoot` empty = no backup (the game folder isn't writable).
+	void start(const std::filesystem::path &library, const std::filesystem::path &backupRoot);
 	// Backs up one character's folder (after it changed). Does nothing without a backup.
 	void character(const std::wstring &folderName);
 

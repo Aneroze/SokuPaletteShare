@@ -35,19 +35,9 @@ namespace ps {
 		// in a file name.
 		std::wstring sectionOf(const std::wstring &name) { return name[0] == L'*' ? name : L"palette:" + name; }
 
-		// Before 1.0.0 a palette's section was its plain file name.
-		bool hasLegacySection(const std::wstring &name)
-		{
-			auto lowered = lower(name);
-			return name[0] != L'*' && lowered != L"default" && lowered != L"last" && lowered != L"last2p";
-		}
-
 		int readFallback(const std::wstring &ini, const std::wstring &name)
 		{
-			int fallback = static_cast<int>(GetPrivateProfileIntW(sectionOf(name).c_str(), L"fallback", -1, ini.c_str()));
-			if (fallback < 0 && hasLegacySection(name))
-				fallback = static_cast<int>(GetPrivateProfileIntW(name.c_str(), L"fallback", -1, ini.c_str()));
-			return fallback;
+			return static_cast<int>(GetPrivateProfileIntW(sectionOf(name).c_str(), L"fallback", -1, ini.c_str()));
 		}
 
 		// Windows writes an .ini in the ANSI code page unless the file starts with a UTF-16 byte order
@@ -222,8 +212,6 @@ namespace ps {
 		auto ini = (lib.folder / L"palettes.ini").wstring();
 		ensureUnicode(ini);
 		WritePrivateProfileStringW(sectionOf(name).c_str(), L"fallback", std::to_wstring(slot).c_str(), ini.c_str());
-		if (hasLegacySection(name))
-			WritePrivateProfileStringW(name.c_str(), nullptr, nullptr, ini.c_str());
 		g_stamp[charId] = stampOf(lib.folder);
 		backup::character(lib.folderName);
 		log("library: %ls/%ls fallback set to %d", lib.folderName.c_str(), name.c_str(), slot);
@@ -244,8 +232,6 @@ namespace ps {
 		auto ini = (lib.folder / L"palettes.ini").wstring();
 		ensureUnicode(ini);
 		WritePrivateProfileStringW(sectionOf(name).c_str(), nullptr, nullptr, ini.c_str());
-		if (hasLegacySection(name))
-			WritePrivateProfileStringW(name.c_str(), nullptr, nullptr, ini.c_str());
 		g_stamp[charId] = stampOf(lib.folder);
 		backup::character(lib.folderName);
 		log("library: %ls/%ls fallback cleared (default %d)", lib.folderName.c_str(), name.c_str(), lib.defaultFallback);
