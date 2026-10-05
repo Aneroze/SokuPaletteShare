@@ -72,10 +72,6 @@ static void loadConfig(const std::filesystem::path &ini)
 {
 	ps::config.showOpponentPalettes = iniInt(ini, L"Display", L"ShowOpponentPalettes", 1) != 0;
 	ps::config.showOriginalPalettes = iniInt(ini, L"Picker", L"ShowOriginalPalettes", 0) != 0;
-	auto storage = iniString(ini, L"Replay", L"Storage");
-	ps::config.replayMetaInRep = _stricmp(storage.c_str(), "rep") == 0;
-	if (!storage.empty() && !ps::config.replayMetaInRep && _stricmp(storage.c_str(), "sidecar"))
-		ps::log("config: [Replay] Storage=%s is neither sidecar nor rep, using sidecar", storage.c_str());
 	// A key or modifier taken out of the ini (or left empty) is none: no Key, no hotkey. Without an
 	// ini at all, the defaults (Ctrl+P).
 	std::error_code ec;
@@ -142,7 +138,7 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 	ps::net::install();
 	ps::picker::install();
 	ps::menu::install();
-	ps::meta::install(ps::config.replayMetaInRep ? ps::meta::Storage::Rep : ps::meta::Storage::Sidecar);
+	ps::meta::install();
 	return true;
 }
 

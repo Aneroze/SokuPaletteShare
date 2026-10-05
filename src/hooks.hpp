@@ -12,7 +12,6 @@ namespace ps {
 		bool showOriginalPalettes = false;
 		// [Replay] Storage: where saved replays keep their palettes: "sidecar" (<name>.meta.json next
 		// to the replay, default) or "rep" (appended to the .rep itself).
-		bool replayMetaInRep = false;
 		// [Hotkey] Modifier + Key (virtual-key codes): toggle the opponent's custom palette, even
 		// mid-match. Modifier 0 = key alone.
 		int toggleModifier = VK_CONTROL;

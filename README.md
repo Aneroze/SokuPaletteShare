@@ -81,9 +81,9 @@ folder can't be written to, there's no backup, and the log says so. Libraries of
 ## Replays
 
 Saved replays keep both sides' custom palettes, about 1 KB each, and show them again when watched
-with PaletteShare. By default they're stored in `<replay name>.meta.json` next to the `.rep`; share
-both files. `[Replay] Storage=rep` appends them to the `.rep` itself instead; the game ignores the
-extra data. Watching reads both. The `.meta.json` has one key per mod, so other mods can use it too.
+with PaletteShare. They're stored in `<replay name>.meta.json` next to the `.rep` (share both files);
+the `.rep` itself stays exactly as the game wrote it. The `.meta.json` has one key per mod, so other
+mods can use it too.
 
 ## Spectators
 
@@ -99,7 +99,6 @@ PaletteShare too.
 | `[Hotkey] Modifier`, `Key` | the toggle hotkey (default Ctrl+P). Remove `Key` for no hotkey, `Modifier` for the key alone |
 | `[Display] ShowOpponentPalettes=0` | start with opponents' palettes hidden |
 | `[Picker] ShowOriginalPalettes=1` | list original colors of slots a palette mod replaces |
-| `[Replay] Storage=sidecar\|rep` | where replay palettes go |
 | `[Debug] Log=1` | `PaletteShare.log` (max 2 MB; previous run in `PaletteShare.prev.log`). Includes opponents' IP addresses. Send both logs with bug reports. |
 
 Testing only, under `[Debug]`:

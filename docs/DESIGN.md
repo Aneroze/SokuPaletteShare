@@ -145,8 +145,9 @@ replacing it, is applied mid-match by the next battle render.
 - [x] **M4 replays**: per-replay metadata (src/replaymeta.cpp, meant to become its own mod): a JSON
   object with one key per mod, saved after the game's writer (0x42B2D0) returns, either to a
   `<name>.meta.json` sidecar (default; merged with the keys already there, written via a temp file)
-  or appended to the .rep after the game's data (`[Replay] Storage=rep`; compact JSON + footer: u32
-  size, CRC-32, `SOKUMETA`). Read back after readReplay (0x42EAC0) from both places. Both functions
+  or (until 2026-10-05, git tag `rep-storage-last`) appended to the .rep after the game's data
+  (`[Replay] Storage=rep`; compact JSON + footer: u32 size, CRC-32, `SOKUMETA`), dropped as rarely
+  worth its code. Read back after readReplay (0x42EAC0). Both functions
   are hooked at their entry (SEH prologue moved to a trampoline), which also covers SaveRep (calls
   the game's save, 0x43EBE0) and ReplayDnD (calls readReplay directly; the sidecar is found through
   the real path of the opened replay, since ReplayDnD passes an ANSI stand-in). src/replay.cpp stores

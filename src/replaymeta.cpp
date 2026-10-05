@@ -28,7 +28,6 @@ namespace ps::meta {
 		constexpr DWORD WRITE_REPLAY = 0x42B2D0;
 		constexpr DWORD READ_REPLAY = 0x42EAC0;
 
-		Storage g_storage = Storage::Sidecar;
 		std::timed_mutex g_mutex;
 		std::map<std::string, nlohmann::json> g_pending;  // for the next saved replay
 		std::set<std::string> g_owned;  // keys we write: removed from a sidecar when we have nothing for them
@@ -88,49 +87,11 @@ namespace ps::meta {
 			return data;
 		}
 
-		// The metadata appended to a .rep, if there is a valid one.
-		std::optional<nlohmann::json> readRep(const char *replay)
-		{
-			auto data = readWhole(replay);
-			auto text = data ? format::trailerOf(data->data(), data->size()) : std::nullopt;
-			return text ? parseObject(*text) : std::nullopt;
-		}
-
-		// Whether a replay ends exactly where the game's data ends (so nothing is appended yet).
+		// Whether a replay ends exactly where the game's data ends (the game wrote all of it).
 		bool endsAtGameData(const std::vector<uint8_t> &data)
 		{
 			auto end = format::gameDataEnd(data.data(), data.size(), data.size());
 			return end && *end == data.size();
-		}
-
-		void appendToRep(const char *replay, const std::map<std::string, nlohmann::json> &pending)
-		{
-			nlohmann::json content = nlohmann::json::object();
-			for (auto &[key, value] : pending)
-				content[key] = value;
-			std::string text;
-			try {
-				text = content.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-			} catch (...) {
-				log("meta: can't serialize the metadata for %s", replay);
-				return;
-			}
-			auto data = readWhole(replay);
-			if (!data || !endsAtGameData(*data)) {
-				log("meta: %s doesn't end where its inputs end, not adding metadata", replay);
-				return;
-			}
-			HANDLE file = CreateFileA(replay, GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-			if (file == INVALID_HANDLE_VALUE) {
-				log("meta: can't open %s to add metadata (error %lu)", replay, GetLastError());
-				return;
-			}
-			auto out = format::makeTrailer(text);
-			DWORD written = 0;
-			bool ok = SetFilePointer(file, 0, nullptr, FILE_END) != INVALID_SET_FILE_POINTER &&
-			          WriteFile(file, out.data(), static_cast<DWORD>(out.size()), &written, nullptr) && written == out.size();
-			CloseHandle(file);
-			log("meta: %s %s (%d key(s), %u bytes appended)", replay, ok ? "got its metadata" : "FAILED to get its metadata", (int)pending.size(), (unsigned)out.size());
 		}
 
 		// The file's JSON object; a missing file is an empty object, an unreadable one nullopt.
@@ -172,14 +133,6 @@ namespace ps::meta {
 					log("meta: %s wasn't written as expected, no metadata saved", replay);
 				return;
 			}
-			if (g_storage == Storage::Rep) {
-				if (!pending.empty())
-					appendToRep(replay, pending);
-				pending.clear();  // and below: a stale sidecar of the same name loses our keys
-				if (GetFileAttributesW(sidecarOf(wide(replay)).c_str()) == INVALID_FILE_ATTRIBUTES)
-					return;
-			}
-
 			// A sidecar may already be there: other mods' keys, or one left behind by a deleted
 			// replay of the same name, whose data for our keys must not stick to this replay.
 			auto file = sidecarOf(wide(replay));
@@ -220,20 +173,14 @@ namespace ps::meta {
 			log("meta: %ls %s (%d key(s) from us, %u bytes)", file.c_str(), ok ? "written" : "NOT written", (int)pending.size(), (unsigned)text.size());
 		}
 
-		// Both places, whatever we save to: replays come from other players too.
 		void readWatched(const char *replay)
 		{
-			auto content = readRep(replay).value_or(nlohmann::json::object());
-			size_t inRep = content.size();
 			auto file = sidecarOf(realPath(replay));
-			if (auto sidecar = readSidecar(file))
-				for (auto &[key, value] : sidecar->items())
-					content[key] = value;
+			auto content = readSidecar(file).value_or(nlohmann::json::object());
 			std::lock_guard<std::timed_mutex> lock(g_mutex);
 			g_watched = content.empty() ? nlohmann::json() : content;
 			if (!content.empty())
-				log("meta: watching a replay with %d key(s) (%d in the .rep, %d from %ls)", (int)content.size(), (int)inRep,
-					(int)(content.size() - inRep), file.c_str());
+				log("meta: watching a replay with %d key(s) from %ls", (int)content.size(), file.c_str());
 		}
 
 		int __fastcall onWriteReplay(void *self, void *edx, const char *path)
@@ -293,12 +240,11 @@ namespace ps::meta {
 		return *it;
 	}
 
-	void install(Storage storage)
+	void install()
 	{
-		g_storage = storage;
 		orig_writeReplay = reinterpret_cast<Method>(patch::entry(WRITE_REPLAY, reinterpret_cast<const void *>(&onWriteReplay), "replay saving"));
 		orig_readReplay = reinterpret_cast<Method>(patch::entry(READ_REPLAY, reinterpret_cast<const void *>(&onReadReplay), "replay loading"));
-		log("meta: replay hooks %s (write %p, read %p), saving to %s", orig_writeReplay && orig_readReplay ? "installed" : "INCOMPLETE",
-			orig_writeReplay, orig_readReplay, storage == Storage::Rep ? "the .rep" : "sidecar files");
+		log("meta: replay hooks %s (write %p, read %p)", orig_writeReplay && orig_readReplay ? "installed" : "INCOMPLETE",
+			orig_writeReplay, orig_readReplay);
 	}
 }

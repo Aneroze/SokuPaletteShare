@@ -256,20 +256,6 @@ namespace {
 		auto short_ = fakeReplay(100);
 		short_.resize(short_.size() - 1);
 		CHECK(!gameDataEnd(short_.data(), short_.size(), short_.size()));
-
-		std::string json = "{\"PaletteShare\":{\"version\":1}}";
-		auto withTrailer = replay;
-		auto trailer = makeTrailer(json);
-		withTrailer.insert(withTrailer.end(), trailer.begin(), trailer.end());
-		auto back = trailerOf(withTrailer.data(), withTrailer.size());
-		CHECK(back && *back == json);
-		CHECK(!trailerOf(replay.data(), replay.size()));  // no trailer
-		auto tampered = withTrailer;
-		tampered[replay.size() + 3] ^= 1;
-		CHECK(!trailerOf(tampered.data(), tampered.size()));  // CRC
-		auto extra = withTrailer;
-		extra.insert(extra.begin() + 0x7B, 0);  // shifts everything: the trailer no longer starts at the game data's end
-		CHECK(!trailerOf(extra.data(), extra.size()));
 	}
 
 	void testPaletteFiles()
@@ -349,18 +335,6 @@ namespace {
 		}
 		printf("  protocol: 200000 mutated packets, %d still valid palette chunks\n", accepted);
 
-		auto replay = fakeReplay(50);
-		auto trailer = meta::format::makeTrailer("{\"PaletteShare\":{\"version\":1,\"palettes\":{}}}");
-		replay.insert(replay.end(), trailer.begin(), trailer.end());
-		for (int n = 0; n < 100000; n++) {
-			auto d = mutate(replay, rng);
-			try {
-				if (auto text = meta::format::trailerOf(d.data(), d.size()))
-					meta::format::parseObject(*text);
-			} catch (...) {
-				CHECK(!"the replay metadata reader threw");
-			}
-		}
 		std::string json = "{\"PaletteShare\":{\"version\":1,\"palettes\":{\"p1\":{\"character\":0,\"slot\":7,\"palette\":\"AAAA\"}}}}";
 		for (int n = 0; n < 100000; n++) {
 			auto d = mutate(bytes(json), rng);
@@ -370,7 +344,7 @@ namespace {
 				CHECK(!"the JSON reader threw");
 			}
 		}
-		printf("  replay metadata: 200000 mutated trailers and documents\n");
+		printf("  replay metadata: 100000 mutated documents\n");
 
 		std::vector<std::pair<std::string, std::vector<uint8_t>>> files = {
 			{"f.pal", testPalette(16, 3).serialize()}, {"f.act", std::vector<uint8_t>(772, 9)},
