@@ -208,6 +208,20 @@ namespace {
 		std::vector<uint8_t> oldAck(ack.begin(), ack.end() - 4);  // without the offer number
 		auto parsedOldAck = proto::parseAck(oldAck.data(), oldAck.size());
 		CHECK(parsedOldAck && parsedOldAck->seq == 0);
+		// Spectators: a side's palette.
+		for (uint8_t side : {0, 1}) {
+			auto p32 = testPalette(32, 6);
+			auto sidePackets = proto::makeSide(side, 9, 10, 4, hashPalette(p32), p32.serialize());
+			CHECK(sidePackets.size() == 2);
+			for (auto &packet : sidePackets) {
+				CHECK(packet.size() < 1024);
+				auto parsed = proto::parseSide(packet.data(), packet.size());
+				CHECK(parsed && parsed->side == side && parsed->chunk.seq == 9 && parsed->chunk.charId == 10 && parsed->chunk.slot == 4);
+				CHECK(!proto::parsePalette(packet.data(), packet.size()));  // not mistaken for the opponent's
+			}
+		}
+		auto badSide = proto::makeSide(2, 1, 3, 0, hashPalette(p), p.serialize())[0];
+		CHECK(!proto::parseSide(badSide.data(), badSide.size()));  // only sides 0 and 1
 		std::vector<uint8_t> notOurs = {0x05, 'P', 'S', 'H', 'R', 2, 1};
 		CHECK(!proto::isOurs(notOurs.data(), notOurs.size()));
 	}
@@ -298,6 +312,8 @@ namespace {
 		std::vector<std::vector<uint8_t>> packets = {proto::makeHello(proto::ROLE_PLAYER, false), proto::makeAck(hashPalette(p16), 5)};
 		for (auto &chunk : proto::makePalette(9, 3, 1, hashPalette(p32), p32.serialize()))
 			packets.push_back(chunk);
+		for (auto &chunk : proto::makeSide(1, 9, 3, 1, hashPalette(p16), p16.serialize()))
+			packets.push_back(chunk);
 		int accepted = 0;
 		for (int n = 0; n < 200000; n++) {
 			auto d = mutate(packets[rng.below(static_cast<uint32_t>(packets.size()))], rng);
@@ -306,6 +322,8 @@ namespace {
 					accepted++;
 					CHECK(c->offset + c->data.size() <= c->totalSize && c->slot <= 7 && c->charId < proto::MAX_CHARACTER_ID);
 				}
+				if (auto c = proto::parseSide(d.data(), d.size()))
+					CHECK(c->side <= 1 && c->chunk.offset + c->chunk.data.size() <= c->chunk.totalSize && c->chunk.slot <= 7);
 				proto::parseHello(d.data(), d.size());
 				proto::parseAck(d.data(), d.size());
 				Palette::deserialize(d.data(), d.size());

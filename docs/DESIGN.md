@@ -60,14 +60,21 @@ buffer is 1024 bytes, so palettes go in chunks of ≤900 bytes (16-bit: 1 packet
   highest version in both ranges (peers that don't send a range speak just their header version),
   re-checked on every HELLO; HELLO's own layout never changes. Only the game's opponent is
   accepted: the client checks the host's address, the host an address that asked the game to play
-  (INIT_REQUEST with PLAY_REQU) in the last 60 s; spectators ask to spectate and aren't counted
-  (their HELLOs, role spectator, are ignored until spectator support).
+  (INIT_REQUEST with PLAY_REQU) in the last 60 s; spectators ask to spectate and aren't counted.
+  A spectator HELLO (role spectator) is answered by whoever the spectator's game watches through,
+  if that address asked the game to spectate (INIT_REQUEST with SPECTATE_REQU, last 30 min).
 - **PALETTE** `{seq, charId, slot, hash, totalSize, offset, len, bytes}`: our current palette,
   resent every 500 ms until acknowledged (max 60 times). `seq` numbers our offers, so a late or
   reordered datagram never replaces a newer offer. The receiver reassembles (max 4 in flight),
   checks charId < 256, slot < 8, the sizes and the hash, caches it (max 32 new palettes per
   session), and keeps the newest offer per character (character-select previews) and per
   character and slot (what the opponent loads with).
+- **SIDE** `{side, seq, charId, slot, hash, totalSize, offset, len, bytes}` (to spectators): what
+  that side is shown with. A player node serves its own palette for its side and the opponent's
+  raw offer for theirs; a spectator serves what it received, so relays work the same way. Sent at
+  each change (character load, a late palette) and to a spectator right after its HELLO, resent
+  every 500 ms until acknowledged (max 20 times, 4 while the spectator never acknowledged
+  anything: little traffic for a forged address). Up to 16 spectators per node.
 - **ACK** `{hash, seq}`: confirms that one offer. Offers in a row often share a palette (the
   wheel stepping to the fallback slot re-offers it per slot), so an ACK by hash alone could confirm
   the final offer before it was sent. The local offer is also sent once more at character load.
@@ -114,8 +121,21 @@ replacing it, is applied mid-match by the next battle render.
     straight from the game's archives (src/original.cpp). Locally modified slots are flagged.
     Honest limit: an opponent without the mod who replaced their own slot files sees their
     version.
-- [ ] **M3 spectators**: the host sends both palettes to modded spectators; spectators that relay
-  to other spectators (REDIRECT / CHAIN packets) pass them on from their cache.
+- [x] **M3 spectators** (2026-10-05): see SIDE above. Spectators are told apart by their scenes
+  (LOADINGWATCH 12 / BATTLEWATCH 15; mainMode VSWATCH, subMode REPLAY, so before this they were
+  taken for replay playback and got nothing). The spectator's upstream is the game's own peer
+  address (`netUdp.opponent`). Verified with three local games (Copy host, CC2 client, CC3
+  spectator): the host handed the spectator to the client (127.0.0.1:10802), which served both
+  palettes; the spectator showed Green Reimu and inverted Sanae at load, both when watching from
+  the start and when joining mid-battle. With a 4th game (CC4): the second spectator was handed to
+  the first one (CC3 relayed both palettes). Through the public IP (router hairpin, peers seen at
+  LAN addresses): same results. Full matches (driven to a 2-0 with the harness): both spectators
+  saved `[Spectate]` replays with both palettes in the sidecar, and they play back with them.
+  Spectators save a replay at the end of the match (BattleWatch 0x4288CB → 0x454240) only when the
+  config byte 0x8998B3 is 0 or 2; the generic save (0x43EBE0) is for subMode 1 only.
+  Found on the way: a spectator whose relay sent the palettes after its loading screen picks up
+  both sides late, and the late-palette rebuild handled one side at a time (the second cancelled
+  the first, which stayed on its fallback slot); now one rebuild per side.
 - [x] **M4 replays**: per-replay metadata (src/replaymeta.cpp, meant to become its own mod): a JSON
   object with one key per mod, saved after the game's writer (0x42B2D0) returns, either to a
   `<name>.meta.json` sidecar (default; merged with the keys already there, written via a temp file)
@@ -196,7 +216,8 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
   and the newest is resent, but this hasn't been exercised by a test.
 - The toggle temporarily writes the global palette on the render thread; the loader thread also
   uses it. Toggles only happen in battle scenes, when the loader is idle.
-- Per-node spectator limit and when the host redirects (for M3).
+- Per-node spectator limit and when exactly the host redirects (seen: the first spectator went to
+  the client).
 
 ## Robustness
 

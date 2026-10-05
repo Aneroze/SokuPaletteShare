@@ -2,7 +2,7 @@
 #include <optional>
 #include "palette.hpp"
 
-// Palette exchange with the opponent in netplay.
+// Palette exchange with the opponent in netplay, and with spectators.
 //
 // While both players are in a netplay session (character select, loading, battle), each side
 // offers the palette its own character is shown with: captured from the character-select
@@ -38,6 +38,13 @@ namespace ps::net {
 		Incompatible,  // they run another protocol version: they see your fallback slot
 	};
 	PeerStatus peerStatus();
+
+	// Player in netplay: a side's character loaded (own = our palette for our side). Spectators
+	// watching through us get what each side is shown with.
+	void sideLoaded(int side, int charId, int slot, const Palette *own);
+	// Spectating: the palette that side's player is shown with, for this character and slot, if
+	// the game we watch through sent it (it is in the cache by then).
+	std::optional<PaletteHash> watchedPalette(int side, int charId, int slot);
 
 	// Bumped whenever a new remote palette has been received; lets the renderer pick up a palette
 	// that arrived after the character had already loaded.

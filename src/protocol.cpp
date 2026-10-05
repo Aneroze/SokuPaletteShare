@@ -93,23 +93,58 @@ namespace ps::proto {
 		return w.take();
 	}
 
+	namespace {
+		// side < 0: a PALETTE packet, else a SIDE packet for that side.
+		std::vector<std::vector<uint8_t>> chunks(int side, uint32_t seq, uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized)
+		{
+			std::vector<std::vector<uint8_t>> packets;
+			for (size_t offset = 0; offset < serialized.size(); offset += MAX_CHUNK) {
+				size_t len = std::min(MAX_CHUNK, serialized.size() - offset);
+				Writer w(side < 0 ? KIND_PALETTE : KIND_SIDE);
+				if (side >= 0)
+					w.u8(static_cast<uint8_t>(side));
+				w.u32(seq);
+				w.u16(charId);
+				w.u8(slot);
+				w.bytes(hash.bytes.data(), hash.bytes.size());
+				w.u16(static_cast<uint16_t>(serialized.size()));
+				w.u16(static_cast<uint16_t>(offset));
+				w.u16(static_cast<uint16_t>(len));
+				w.bytes(serialized.data() + offset, len);
+				packets.push_back(w.take());
+			}
+			return packets;
+		}
+
+		std::optional<PaletteChunk> readChunk(Reader &r)
+		{
+			PaletteChunk c;
+			uint16_t len;
+			if (!r.u32(c.seq) || !r.u16(c.charId) || !r.u8(c.slot) || !r.bytes(c.hash.bytes.data(), c.hash.bytes.size()) ||
+			    !r.u16(c.totalSize) || !r.u16(c.offset) || !r.u16(len))
+				return std::nullopt;
+			if (c.charId >= MAX_CHARACTER_ID || c.slot > 7)
+				return std::nullopt;
+			// Only the two real palette sizes, and a chunk that fits inside it.
+			if (c.totalSize != 1 + Palette::colorBytes(16) && c.totalSize != 1 + Palette::colorBytes(32))
+				return std::nullopt;
+			if (len == 0 || len > MAX_CHUNK || c.offset + len > c.totalSize)
+				return std::nullopt;
+			c.data.resize(len);
+			if (!r.bytes(c.data.data(), len) || !r.atEnd())
+				return std::nullopt;
+			return c;
+		}
+	}
+
 	std::vector<std::vector<uint8_t>> makePalette(uint32_t seq, uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized)
 	{
-		std::vector<std::vector<uint8_t>> packets;
-		for (size_t offset = 0; offset < serialized.size(); offset += MAX_CHUNK) {
-			size_t len = std::min(MAX_CHUNK, serialized.size() - offset);
-			Writer w(KIND_PALETTE);
-			w.u32(seq);
-			w.u16(charId);
-			w.u8(slot);
-			w.bytes(hash.bytes.data(), hash.bytes.size());
-			w.u16(static_cast<uint16_t>(serialized.size()));
-			w.u16(static_cast<uint16_t>(offset));
-			w.u16(static_cast<uint16_t>(len));
-			w.bytes(serialized.data() + offset, len);
-			packets.push_back(w.take());
-		}
-		return packets;
+		return chunks(-1, seq, charId, slot, hash, serialized);
+	}
+
+	std::vector<std::vector<uint8_t>> makeSide(uint8_t side, uint32_t seq, uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized)
+	{
+		return chunks(side, seq, charId, slot, hash, serialized);
 	}
 
 	std::optional<Hello> parseHello(const uint8_t *data, size_t size)
@@ -142,24 +177,22 @@ namespace ps::proto {
 	{
 		if (kindOf(data, size) != KIND_PALETTE)
 			return std::nullopt;
-
 		Reader r(data, size);
-		PaletteChunk c;
-		uint16_t len;
-		if (!r.u32(c.seq) || !r.u16(c.charId) || !r.u8(c.slot) || !r.bytes(c.hash.bytes.data(), c.hash.bytes.size()) ||
-		    !r.u16(c.totalSize) || !r.u16(c.offset) || !r.u16(len))
+		return readChunk(r);
+	}
+
+	std::optional<SideChunk> parseSide(const uint8_t *data, size_t size)
+	{
+		if (kindOf(data, size) != KIND_SIDE)
 			return std::nullopt;
-		if (c.charId >= MAX_CHARACTER_ID || c.slot > 7)
+		Reader r(data, size);
+		uint8_t side;
+		if (!r.u8(side) || side > 1)
 			return std::nullopt;
-		// Only the two real palette sizes, and a chunk that fits inside it.
-		if (c.totalSize != 1 + Palette::colorBytes(16) && c.totalSize != 1 + Palette::colorBytes(32))
+		auto chunk = readChunk(r);
+		if (!chunk)
 			return std::nullopt;
-		if (len == 0 || len > MAX_CHUNK || c.offset + len > c.totalSize)
-			return std::nullopt;
-		c.data.resize(len);
-		if (!r.bytes(c.data.data(), len) || !r.atEnd())
-			return std::nullopt;
-		return c;
+		return SideChunk{side, std::move(*chunk)};
 	}
 
 	std::optional<Ack> parseAck(const uint8_t *data, size_t size)

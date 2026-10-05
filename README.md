@@ -21,8 +21,8 @@ palette-picker, and 32-bit palettes with PaletteTrueColors (opponents without it
 - **Folders** use the game's internal character names: `udonge` is Reisen, `utsuho` Okuu, `chirno`
   Cirno, `meirin` Meiling. The file name is the palette's name. New files show up the next time you
   reach that character's palette step.
-- **Fallback**: each palette has the normal slot (0-7) the game actually sends. Players without
-  PaletteShare and spectators see that slot. The default is slot 0.
+- **Fallback**: each palette has the normal slot (0-7) the game actually sends. Players and
+  spectators without PaletteShare see that slot. The default is slot 0.
 - **Backup**: removing the mod in SokuLauncher deletes its folder, so PaletteShare keeps a copy in
   `PaletteShare\backup\` in the game folder. Reinstall the mod and your palettes come back.
 
@@ -82,6 +82,13 @@ with PaletteShare. By default they're stored in `<replay name>.meta.json` next t
 both files. `[Replay] Storage=rep` appends them to the `.rep` itself instead; the game ignores the
 extra data. Watching reads both. The `.meta.json` has one key per mod, so other mods can use it too.
 
+## Spectators
+
+Spectators with PaletteShare see both players' custom palettes, with the same Ctrl+P toggle and
+transparency check. A spectator's game watches through one of the players (often the client, not
+the host) or through another spectator, and gets the palettes from there, so that one needs
+PaletteShare too.
+
 ## Settings (`PaletteShare.ini`)
 
 | Setting | |
@@ -109,7 +116,6 @@ Testing only, under `[Debug]`:
 
 ## Limits
 
-- Spectators see the normal palettes (planned for 1.1).
 - With palette-picker loaded, its picker is used instead of PaletteShare's. Palettes are still
   shared.
 - Soku2 and other added characters are left alone.

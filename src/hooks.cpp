@@ -78,7 +78,13 @@ namespace ps {
 			return local < 0 || side == local;
 		}
 
-		bool watchingReplay() { return SokuLib::subMode == SokuLib::BATTLE_SUBMODE_REPLAY; }
+		// Spectators run in the replay sub-mode too, but get their palettes live. Told apart by their
+		// own scenes (a replay of a watched match plays in the normal ones).
+		bool spectating()
+		{
+			return SokuLib::sceneId == SokuLib::SCENE_LOADINGWATCH || SokuLib::sceneId == SokuLib::SCENE_BATTLEWATCH;
+		}
+		bool watchingReplay() { return SokuLib::subMode == SokuLib::BATTLE_SUBMODE_REPLAY && !spectating(); }
 
 		int remoteSide()
 		{
@@ -106,6 +112,8 @@ namespace ps {
 			std::optional<Palette> palette;
 			if (watchingReplay())
 				palette = replay::paletteFor(side, charId, slot);
+			else if (spectating())
+				hash = net::watchedPalette(side, charId, slot);
 			else if (config.forcePalette[side])
 				hash = config.forcePalette[side];
 			else if (side == remoteSide())
@@ -162,49 +170,54 @@ namespace ps {
 			size_t next = 0;
 			std::vector<int> fresh;  // one per side.textures entry, 0 when it failed
 		};
-		Rebuild g_rebuild;
-		constexpr size_t TEXTURES_PER_FRAME = 96;
+		// One per side: spectating, both sides' palettes may arrive late at once.
+		Rebuild g_rebuilds[2];
+		constexpr size_t TEXTURES_PER_FRAME = 96;  // both sides together
 
-		void cancelRebuild()
+		void cancelRebuild(int index)
 		{
-			if (!g_rebuild.active)
+			auto &rebuild = g_rebuilds[index];
+			if (!rebuild.active)
 				return;
-			for (int handle : g_rebuild.fresh)
+			for (int handle : rebuild.fresh)
 				if (handle)
 					SokuLib::textureMgr.remove(handle);
-			g_rebuild = Rebuild{};
+			rebuild = Rebuild{};
 		}
 
 		void startRebuild(int index, const Palette &palette, bool toCustom)
 		{
-			cancelRebuild();
-			g_rebuild.active = true;
-			g_rebuild.side = index;
-			g_rebuild.palette = palette;
-			g_rebuild.toCustom = toCustom;
+			cancelRebuild(index);
+			auto &rebuild = g_rebuilds[index];
+			rebuild.active = true;
+			rebuild.side = index;
+			rebuild.palette = palette;
+			rebuild.toCustom = toCustom;
 		}
 
-		void stepRebuild()
+		// Returns how many textures it made (out of `budget`).
+		size_t stepRebuild(Rebuild &rebuild, size_t budget)
 		{
-			if (!g_rebuild.active)
-				return;
-			auto &side = g_sides[g_rebuild.side];
+			if (!rebuild.active)
+				return 0;
+			auto &side = g_sides[rebuild.side];
 			auto &current = SokuLib::Palette::currentPalette;
 			auto saved = readGamePalette(current);
-			writeGamePalette(g_rebuild.palette, current);
-			for (size_t n = 0; n < TEXTURES_PER_FRAME && g_rebuild.next < side.textures.size(); n++, g_rebuild.next++) {
+			writeGamePalette(rebuild.palette, current);
+			size_t made = 0;
+			for (; made < budget && rebuild.next < side.textures.size(); made++, rebuild.next++) {
 				int fresh = 0;
-				SokuLib::textureMgr.loadTexture(&fresh, side.textures[g_rebuild.next].second.c_str(), nullptr, nullptr);
-				g_rebuild.fresh.push_back(fresh);
+				SokuLib::textureMgr.loadTexture(&fresh, side.textures[rebuild.next].second.c_str(), nullptr, nullptr);
+				rebuild.fresh.push_back(fresh);
 			}
 			if (saved.valid())
 				writeGamePalette(saved, current);
-			if (g_rebuild.next < side.textures.size())
-				return;
+			if (rebuild.next < side.textures.size())
+				return made;
 
 			int swapped = 0;
-			for (size_t i = 0; i < g_rebuild.fresh.size(); i++) {
-				int fresh = g_rebuild.fresh[i];
+			for (size_t i = 0; i < rebuild.fresh.size(); i++) {
+				int fresh = rebuild.fresh[i];
 				if (!fresh)
 					continue;
 				auto a = SokuLib::textureMgr.Get(side.textures[i].first);
@@ -215,16 +228,23 @@ namespace ps {
 				}
 				SokuLib::textureMgr.remove(fresh);  // releases the texture we swapped out
 			}
-			side.showingCustom = g_rebuild.toCustom;
-			log("  side=%d: %d/%d textures swapped in", g_rebuild.side, swapped, (int)side.textures.size());
-			g_rebuild = Rebuild{};
+			side.showingCustom = rebuild.toCustom;
+			log("  side=%d: %d/%d textures swapped in", rebuild.side, swapped, (int)side.textures.size());
+			rebuild = Rebuild{};
+			return made;
+		}
+
+		void stepRebuilds()
+		{
+			size_t budget = TEXTURES_PER_FRAME;
+			for (auto &rebuild : g_rebuilds)
+				budget -= (std::min)(budget, stepRebuild(rebuild, budget));
 		}
 
 		void showSide(int index, bool custom)
 		{
 			auto &side = g_sides[index];
-			if (g_rebuild.active && g_rebuild.side == index)
-				cancelRebuild();  // the hotkey wins over a late palette still being prepared
+			cancelRebuild(index);  // the hotkey wins over a late palette still being prepared
 			if (!side.custom || side.showingCustom == custom)
 				return;
 			rebuildTextures(side, custom ? *side.custom : side.vanilla);
@@ -279,8 +299,7 @@ namespace ps {
 			std::lock_guard lock(g_sidesMutex);
 			auto &palette = SokuLib::Palette::currentPalette;
 			auto &side = g_sides[index];
-			if (g_rebuild.active && g_rebuild.side == index)
-				cancelRebuild();
+			cancelRebuild(index);
 			side = Side{};
 			if (!game::normalCharacter(player->characterIndex) || player->paletteId < 0 || player->paletteId > 7)
 				return;  // Soku2 and other added characters aren't supported
@@ -312,6 +331,7 @@ namespace ps {
 
 			if (index == net::localSide())
 				net::offerLocal(side.charId, side.slot, side.vanilla, hash, true);
+			net::sideLoaded(index, side.charId, side.slot, index == net::localSide() ? &side.vanilla : nullptr);
 
 			side.custom = customFor(index, side.charId, side.slot, side.vanilla);
 			if (!side.custom && index == remoteSide())
@@ -390,8 +410,11 @@ namespace ps {
 			}
 		}
 
+		void pickUpLatePalette(int index);
+
 		// An opponent palette that arrived after their character loaded, or a newer one replacing
-		// what we show (e.g. they changed their mind at the last moment): show that one now.
+		// what we show (e.g. they changed their mind at the last moment): show that one now. When
+		// spectating, either side's.
 		void pickUpLatePalettes()
 		{
 			unsigned generation = net::remoteGeneration();
@@ -399,9 +422,16 @@ namespace ps {
 				return;
 			g_seenGeneration = generation;
 
-			int index = remoteSide();
-			if (index < 0)
-				return;
+			if (spectating()) {
+				pickUpLatePalette(0);
+				pickUpLatePalette(1);
+			} else if (remoteSide() >= 0) {
+				pickUpLatePalette(remoteSide());
+			}
+		}
+
+		void pickUpLatePalette(int index)
+		{
 			std::lock_guard lock(g_sidesMutex);
 			auto &side = g_sides[index];
 			if (side.charId < 0 || !side.vanilla.valid() || side.textures.empty())
@@ -412,7 +442,8 @@ namespace ps {
 			bool same = custom.has_value() == side.custom.has_value() && (!custom || sameColors(*custom, *side.custom));
 			if (same)
 				return;
-			log("opponent palette for side=%d changed after loading: %s", index, custom ? hashPalette(*custom).hex().c_str() : "none");
+			log("%s palette for side=%d changed after loading: %s", spectating() ? "player" : "opponent", index,
+				custom ? hashPalette(*custom).hex().c_str() : "none");
 			replay::record(index, side.charId, side.slot, custom);
 			bool show = custom && g_showOpponent;
 			if (show || side.showingCustom)
@@ -435,7 +466,7 @@ namespace ps {
 					}
 					pickUpLatePalettes();
 					std::lock_guard lock(g_sidesMutex);
-					stepRebuild();
+					stepRebuilds();
 				});
 				int ret = orig(self);
 				guarded("battle drawing", drawToggleNotice);

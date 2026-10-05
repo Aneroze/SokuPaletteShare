@@ -34,6 +34,9 @@ namespace ps::proto {
 		KIND_PALETTE = 2, // u32 seq, u16 charId, u8 slot, u8[16] hash, u16 totalSize, u16 offset, u16 len, bytes
 		KIND_ACK = 3,     // u8[16] hash, u32 seq: which offer this confirms (offers in a row often share
 		                  // a palette while the wheel steps, so the hash alone could confirm the wrong one)
+		KIND_SIDE = 4,    // to a spectator: u8 side (0 left, 1 right), then PALETTE's payload: what that
+		                  // side's player is shown with; acknowledged with ACK. Test builds without it
+		                  // ignore unknown kinds (and spectator HELLOs), so it needs no new version.
 	};
 
 	enum Role : uint8_t {
@@ -71,9 +74,16 @@ namespace ps::proto {
 	std::vector<uint8_t> makeAck(const PaletteHash &hash, uint32_t seq);
 	// Splits the serialized palette into chunk packets.
 	std::vector<std::vector<uint8_t>> makePalette(uint32_t seq, uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized);
+	// The same for a spectator, with the side.
+	std::vector<std::vector<uint8_t>> makeSide(uint8_t side, uint32_t seq, uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized);
+	struct SideChunk {
+		uint8_t side;
+		PaletteChunk chunk;
+	};
 
 	std::optional<Hello> parseHello(const uint8_t *data, size_t size);
 	std::optional<PaletteChunk> parsePalette(const uint8_t *data, size_t size);
+	std::optional<SideChunk> parseSide(const uint8_t *data, size_t size);
 	std::optional<Ack> parseAck(const uint8_t *data, size_t size);
 	std::optional<uint8_t> kindOf(const uint8_t *data, size_t size);
 	std::optional<uint8_t> versionOf(const uint8_t *data, size_t size);

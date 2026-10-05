@@ -11,6 +11,10 @@
   acknowledgement for an earlier offer with the same palette, sent while the wheel stepped to its
   slot, was taken for the final one), so the opponent loaded your fallback slot or a palette you had
   scrolled past. Acknowledgements now name the offer; your palette is also sent once more at load.
+- Spectators: spectators with PaletteShare see both players' custom palettes (on time at the
+  loading screen, also when joining mid-match). Whichever game they watch through, a player or a
+  spectator relaying the match, sends them what each side is shown with; only addresses that asked
+  the game to spectate are answered. New packet kind SIDE (protocol v2; builds without it ignore it).
 - Your palettes live in the mod folder again, `modules\PaletteShare\palettes\<character>\` (shipped
   in the zip with a README, so it's there before the first start), and PaletteShare keeps a copy in
   `<game folder>\PaletteShare\backup`: removing the mod and installing it again brings them back,
