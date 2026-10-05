@@ -34,6 +34,8 @@ add_library(PaletteShare MODULE
 	src/protocol.cpp
 	src/library.hpp
 	src/library.cpp
+	src/backup.hpp
+	src/backup.cpp
 	src/picker.hpp
 	src/picker.cpp
 	src/ui.hpp
@@ -79,6 +81,7 @@ add_executable(PaletteShareTests EXCLUDE_FROM_ALL
 	src/palette.cpp
 	src/palettefile.cpp
 	src/log.cpp
+	src/backup.cpp
 )
 target_include_directories(PaletteShareTests PRIVATE thirdparty)
 target_compile_definitions(PaletteShareTests PRIVATE

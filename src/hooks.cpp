@@ -496,6 +496,8 @@ namespace ps {
 	bool pollOpponentToggle()
 	{
 		static bool wasDown = false;
+		if (!config.toggleKey)
+			return false;  // no hotkey set
 		bool down = (config.hotkeyIgnoresFocus || GetForegroundWindow() == SokuLib::window) &&
 		            (GetAsyncKeyState(config.toggleKey) & 0x8000) &&
 		            (!config.toggleModifier || (GetAsyncKeyState(config.toggleModifier) & 0x8000));

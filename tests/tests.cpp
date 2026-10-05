@@ -4,13 +4,16 @@
 //
 //   tools\test.bat        (builds the PaletteShareTests target and runs it)
 #include <windows.h>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <string>
 #include <vector>
+#include "../src/backup.hpp"
 #include "../src/base64.hpp"
 #include "../src/metaformat.hpp"
 #include "../src/palette.hpp"
@@ -350,6 +353,84 @@ namespace {
 		}
 		printf("  palette files: 3000 mutated files\n");
 	}
+	// The palette backup (backup.hpp), in folders of its own under the test folder.
+	void testBackup()
+	{
+		namespace fs = std::filesystem;
+		auto root = g_dir / L"backup";
+		std::error_code ec;
+		fs::remove_all(root, ec);
+		auto lib = root / L"modules" / L"PaletteShare" / L"palettes", bak = root / L"PaletteShare" / L"backup";
+		auto legacy = root / L"PaletteShare" / L"palettes";
+		auto put = [](const fs::path &file, const std::string &text, int ageSeconds = 0) {
+			fs::create_directories(file.parent_path());
+			{ std::ofstream(file, std::ios::binary) << text; }
+			if (ageSeconds)
+				fs::last_write_time(file, fs::file_time_type::clock::now() - std::chrono::seconds(ageSeconds));
+		};
+		auto read = [](const fs::path &file) {
+			std::ifstream in(file, std::ios::binary);
+			return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		};
+		auto has = [](const fs::path &file) { std::error_code e; return fs::exists(file, e); };
+
+		// An old test build's library, settings newer than the mod folder's, and a mod folder palette.
+		put(legacy / L"reimu" / L"Blue.pal", "blue");
+		put(legacy / L"reimu" / L"palettes.ini", "new settings", 10);
+		put(lib / L"reimu" / L"palettes.ini", "old settings", 100);
+		put(lib / L"reimu" / L"Mine.pal", "mine");
+		backup::start(lib, bak, legacy);
+		CHECK(read(lib / L"reimu" / L"Blue.pal") == "blue");
+		CHECK(read(lib / L"reimu" / L"palettes.ini") == "new settings");  // the newer one
+		CHECK(!has(legacy) && has(bak / L"reimu" / L"Blue.pal"));        // it became the backup
+		CHECK(read(bak / L"reimu" / L"Mine.pal") == "mine");             // and got the rest
+		CHECK(has(lib / backup::MARKER) && has(bak / L"README.txt"));
+
+		// Added, changed and deleted palettes.
+		put(lib / L"reimu" / L"Green.pal", "green");
+		put(lib / L"reimu" / L"Mine.pal", "mine, edited");
+		fs::remove(lib / L"reimu" / L"Blue.pal");
+		backup::character(L"reimu");
+		CHECK(read(bak / L"reimu" / L"Green.pal") == "green");
+		CHECK(read(bak / L"reimu" / L"Mine.pal") == "mine, edited");
+		CHECK(!has(bak / L"reimu" / L"Blue.pal") && read(bak / backup::REMOVED / L"reimu" / L"Blue.pal") == "blue");
+
+		// A whole character folder deleted while the game was closed; an update (marker kept)
+		// doesn't bring anything back.
+		put(lib / L"marisa" / L"Star.pal", "star");
+		backup::character(L"marisa");
+		fs::remove_all(lib / L"marisa");
+		backup::start(lib, bak, legacy);
+		CHECK(!has(lib / L"marisa" / L"Star.pal") && !has(lib / L"reimu" / L"Blue.pal"));
+		CHECK(read(bak / backup::REMOVED / L"marisa" / L"Star.pal") == "star");
+
+		// Removed and installed again: everything comes back, the zip's (newer) files stay.
+		fs::remove_all(root / L"modules");
+		put(lib / L"reimu" / L"Mine.pal", "from the zip");
+		backup::start(lib, bak, legacy);
+		CHECK(read(lib / L"reimu" / L"Green.pal") == "green");
+		CHECK(read(lib / L"reimu" / L"palettes.ini") == "new settings");
+		CHECK(read(lib / L"reimu" / L"Mine.pal") == "from the zip");
+		CHECK(!has(lib / L"reimu" / L"Blue.pal") && !has(lib / L"marisa" / L"Star.pal"));
+		CHECK(has(lib / backup::MARKER));
+
+		// An old library next to an existing backup: brought over once, then left alone.
+		put(legacy / L"sakuya" / L"Knife.pal", "knife");
+		backup::start(lib, bak, legacy);
+		CHECK(read(lib / L"sakuya" / L"Knife.pal") == "knife" && has(legacy / L".moved"));
+		fs::remove(lib / L"sakuya" / L"Knife.pal");
+		backup::start(lib, bak, legacy);
+		CHECK(!has(lib / L"sakuya" / L"Knife.pal"));
+
+		// No backup (game folder not writable): the library still works and nothing is written.
+		fs::remove_all(root, ec);
+		put(lib / L"reimu" / L"Mine.pal", "mine");
+		backup::start(lib, fs::path(), fs::path());
+		CHECK(has(lib / backup::MARKER) && !has(bak));
+		backup::character(L"reimu");
+		CHECK(!has(bak));
+		fs::remove_all(root, ec);
+	}
 }
 
 int main()
@@ -361,7 +442,7 @@ int main()
 
 	struct { const char *name; void (*run)(); } suites[] = {
 		{"sha256", testSha256}, {"base64", testBase64}, {"palettes", testPalettes}, {"protocol", testProtocol},
-		{"replay metadata", testMetaFormat}, {"palette files", testPaletteFiles}, {"fuzz", fuzz},
+		{"replay metadata", testMetaFormat}, {"palette files", testPaletteFiles}, {"backup", testBackup}, {"fuzz", fuzz},
 	};
 	for (auto &suite : suites) {
 		printf("%s\n", suite.name);

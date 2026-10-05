@@ -11,6 +11,17 @@
   acknowledgement for an earlier offer with the same palette, sent while the wheel stepped to its
   slot, was taken for the final one), so the opponent loaded your fallback slot or a palette you had
   scrolled past. Acknowledgements now name the offer; your palette is also sent once more at load.
+- Your palettes live in the mod folder again, `modules\PaletteShare\palettes\<character>\` (shipped
+  in the zip with a README, so it's there before the first start), and PaletteShare keeps a copy in
+  `<game folder>\PaletteShare\backup`: removing the mod and installing it again brings them back,
+  and palettes you delete are moved to `backup\_removed`, never deleted. Libraries of earlier test
+  builds (`<game folder>\PaletteShare\palettes`) are brought over once and become the backup.
+- Hotkey: removing `Key` from `[Hotkey]` (or leaving it empty) turns the hotkey off; removing
+  `Modifier` makes the key work alone. Ctrl+P remains the default when there's no PaletteShare.ini.
+- Picker: every move through the palette list plays the move sound (before, moving between palettes
+  with the same fallback slot was silent), once and right away. Online, the presses that steer the
+  game's palette wheel are held like a real key press, so packet loss can't swallow them (that
+  froze the wheel for 1.5 s, or made you press confirm again); a lost confirm is sent again.
 - Netplay: the per-select limit counts only real custom palettes (up to 256), the handshake retries
   at each character select, and a stranger can't pass as the opponent once a match has started.
 - A palette arriving late is applied over a few frames instead of in one ~30 ms hitch.
@@ -23,7 +34,8 @@
 - Palette files are capped at 64 KB (.pal/.act) and 4 MB (.bmp); a damaged cache file is replaced.
 - Replays: a busy save is logged instead of skipped silently, rep mode also cleans a stale sidecar,
   and a new match starts with fresh entries.
-- The release zip has WHERE-ARE-MY-PALETTES.txt instead of empty palette folders; author Aneroze;
+- The release zip has WHERE-ARE-MY-PALETTES.txt instead of empty palette folders (replaced again
+  by palettes\README.txt and the folders, see above); author Aneroze;
   packaging refuses mismatched versions or a stale DLL. Tests: tools\test.bat.
 - Own palette picker (first version): palettes from `palettes/<character>/`, scrolled with Up/Down in
   the palette step. Each palette has an explicit fallback slot (palettes.ini, per-character default

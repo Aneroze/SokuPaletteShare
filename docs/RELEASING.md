@@ -15,13 +15,14 @@ CreateFile2, CopyFile2 or other newer functions (see src/win7.cpp).
 Never put a palette file or a `palettes.ini` in the zip: SokuLauncher updates a mod by copying the
 new zip's files over the old folder, so they would overwrite a player's own (it deletes nothing
 else; `configFiles` in mod.json, i.e. `PaletteShare.ini`, is kept). Removing the mod deletes the
-whole folder, which is why the library lives in `<game folder>\PaletteShare\palettes`.
+whole folder, which is why the library is backed up to `<game folder>\PaletteShare\backup` (see
+src/backup.hpp).
 
 `dist\PaletteShare-<version>.zip` contains `PaletteShare\PaletteShare.dll`, `mod.json`,
 `PaletteShare.ini`, `README.md`, `LICENSE` (MIT) and `THIRD-PARTY-NOTICES.txt` (the MIT notices of
-SokuLib and nlohmann/json, which are compiled into the DLL) and `WHERE-ARE-MY-PALETTES.txt`, the
-same layout as other SokuLauncher mods. The palette folders are created in the game folder at the
-first start, not shipped.
+SokuLib and nlohmann/json, which are compiled into the DLL), plus `palettes\README.txt` (from
+`palettes-README.txt`) and an empty `palettes\<character>\` folder per character: the same layout
+as other SokuLauncher mods.
 
 ## Before 1.0.0 (needs a person, not a script)
 

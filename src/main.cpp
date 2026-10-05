@@ -2,8 +2,10 @@
 #include <fstream>
 #include <filesystem>
 #include <string>
+#include "guard.hpp"
 #include "hooks.hpp"
 #include "log.hpp"
+#include "backup.hpp"
 #include "library.hpp"
 #include "menu.hpp"
 #include "net.hpp"
@@ -25,13 +27,12 @@ static std::filesystem::path modulePath(HMODULE module)
 	return std::filesystem::path(buffer).parent_path();
 }
 
-// <game folder>\PaletteShare\palettes (next to modules\), if it can be created and written to:
-// outside the mod's folder, so removing the mod (SokuLauncher deletes modules\PaletteShare) never
-// takes the palettes, yet inside the game folder, so it travels with it and is easy to find on
-// Windows and under Wine/Proton alike.
-static std::filesystem::path gameLibrary()
+// <game folder>\PaletteShare (next to modules\), if it can be created and written to: the palette
+// backup goes there, outside the mod's folder (SokuLauncher deletes modules\PaletteShare when the
+// mod is removed) yet inside the game folder, so it travels with it (Windows and Wine/Proton alike).
+static std::filesystem::path gameFolderData()
 {
-	auto folder = modulePath(nullptr) / L"PaletteShare" / L"palettes";
+	auto folder = modulePath(nullptr) / L"PaletteShare";
 	std::error_code ec;
 	std::filesystem::create_directories(folder, ec);
 	auto probe = folder / L".write-test";
@@ -75,11 +76,25 @@ static void loadConfig(const std::filesystem::path &ini)
 	ps::config.replayMetaInRep = _stricmp(storage.c_str(), "rep") == 0;
 	if (!storage.empty() && !ps::config.replayMetaInRep && _stricmp(storage.c_str(), "sidecar"))
 		ps::log("config: [Replay] Storage=%s is neither sidecar nor rep, using sidecar", storage.c_str());
-	ps::config.toggleModifier = iniInt(ini, L"Hotkey", L"Modifier", VK_CONTROL);
-	ps::config.toggleKey = iniInt(ini, L"Hotkey", L"Key", 'P');
+	// A key or modifier taken out of the ini (or left empty) is none: no Key, no hotkey. Without an
+	// ini at all, the defaults (Ctrl+P).
+	std::error_code ec;
+	if (std::filesystem::exists(ini, ec)) {
+		auto vk = [&](const wchar_t *key) {
+			int value = iniInt(ini, L"Hotkey", key, 0);
+			if (value < 0 || value > 0xFE) {
+				ps::log("config: [Hotkey] %ls=%d is not a virtual-key code, using none", key, value);
+				return 0;
+			}
+			return value;
+		};
+		ps::config.toggleModifier = vk(L"Modifier");
+		ps::config.toggleKey = vk(L"Key");
+	}
 	ps::config.hotkeyIgnoresFocus = iniInt(ini, L"Debug", L"HotkeyIgnoresFocus", 0) != 0;
-	ps::log("config: ShowOpponentPalettes=%d ShowOriginalPalettes=%d hotkey modifier=0x%02X key=0x%02X",
-		ps::config.showOpponentPalettes, ps::config.showOriginalPalettes, ps::config.toggleModifier, ps::config.toggleKey);
+	ps::log("config: ShowOpponentPalettes=%d ShowOriginalPalettes=%d hotkey modifier=0x%02X key=0x%02X%s",
+		ps::config.showOpponentPalettes, ps::config.showOriginalPalettes, ps::config.toggleModifier, ps::config.toggleKey,
+		ps::config.toggleKey ? "" : " (no hotkey)");
 
 	const wchar_t *keys[2] = {L"ForcePaletteLeft", L"ForcePaletteRight"};
 	for (int side = 0; side < 2; side++) {
@@ -115,14 +130,13 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 	}
 
 	ps::cache.setDirectory(dir / L"cache");
-	auto library = gameLibrary();
-	if (library.empty()) {
-		library = dir / L"palettes";
-		ps::log("library: the game folder isn't writable, keeping palettes in %ls", library.c_str());
-	} else {
-		ps::log("library: %ls (palettes in %ls are read too)", library.c_str(), (dir / L"palettes").c_str());
-	}
-	ps::setLibraryRoots(library, dir / L"palettes");
+	auto library = dir / L"palettes";
+	auto data = gameFolderData();
+	ps::log("library: %ls, backup: %ls", library.c_str(), data.empty() ? L"none (the game folder isn't writable)" : (data / L"backup").c_str());
+	ps::setLibraryRoot(library);
+	ps::guarded("palette backup", [&] {
+		ps::backup::start(library, data.empty() ? std::filesystem::path() : data / L"backup", modulePath(nullptr) / L"PaletteShare" / L"palettes");
+	});
 	loadConfig(ini);
 	ps::installHooks();
 	ps::net::install();

@@ -1,169 +1,121 @@
 # PaletteShare
 
-A Touhou Hisoutensoku (th123 1.10a) mod that lets players see each other's **custom palettes**
-online. Normally the game only sends your palette *slot number*, so your opponent sees their own
-palette for that slot. With PaletteShare on both sides, each game sends the actual colors your
-character is shown with, and the other game uses them.
+A Touhou Hisoutensoku (th123 1.10a) mod: online, you see your opponent's **custom palette** and
+they see yours. Both players need the mod; without it on both sides nothing changes.
 
-## What you need
+## Quick start
 
-- Both players run PaletteShare. If your opponent doesn't, nothing changes: you both see what
-  you'd see without it.
-- A custom palette, set up the way you already do it. PaletteShare shares whatever palette your
-  game actually shows for your character:
-  - **shady-loader packages** that replace `paletteNNN.pal`,
-  - **edited data files** (`th123*.dat`),
-  - **palette-picker** custom palettes,
-  - 32-bit palettes with **PaletteTrueColors**. Opponents without PaletteTrueColors get a 16-bit
-    version.
+1. Copy the `PaletteShare` folder from the zip into `modules\` and enable it in SokuLauncher or
+   SWRSToys. Windows 7 and later, and Wine/Proton.
+2. Put palette files (`.pal`, `.act`, `.bmp`) in `modules\PaletteShare\palettes\<character>\`.
+3. At character select, in the palette step, **Up/Down** scroll through the normal palettes and
+   yours. Players without the mod see the palette's **fallback** slot instead.
 
-## Your own palettes (picker)
+**Ctrl+P** hides or shows your opponent's custom palette, at character select and mid-match.
 
-Put palette files in `PaletteShare\palettes\<character>\` in your game folder (next to `modules\`). The folder name is the game's
-internal one (e.g. `reimu`, `udonge` for Reisen, `utsuho` for Okuu, `chirno` for Cirno, `meirin`
-for Meiling). The folders of all 20 characters are created when the game starts. The file name
-(without extension) is the palette's name in the picker. New files show up the next time you open
-that character's palette step; no restart needed. The palette menu's "Open palette folder" opens it.
+Palettes you already use also get shared: shady-loader packages, edited `th123*.dat` files,
+palette-picker, and 32-bit palettes with PaletteTrueColors (opponents without it get 16-bit).
 
-That folder is outside the mod's own folder, so updating or removing the mod (removing it in
-SokuLauncher deletes `modules\PaletteShare\`) never takes your palettes or their fallbacks with it,
-and it travels with the game folder. Files in `modules\PaletteShare\palettes\<character>\` are read
-too (a file in the game folder's `PaletteShare\palettes` wins over one of the same name there), and
-the first time a character is used, its `palettes.ini` there (fallbacks, last choice) is copied
-over. If the game folder can't be written to, everything stays in `modules\PaletteShare\palettes\`.
+## Your palettes
 
-Supported files:
-- `.pal`: the game's own format (513 or 1025 bytes, e.g. a shady-loader `paletteNNN.pal`), the old
-  Palette Editor format (256 colors in 1024 bytes, with or without the character's name appended),
-  JASC-PAL (GIMP, Aseprite, Paint Shop Pro) and RIFF PAL (Microsoft).
+- **Folders** use the game's internal character names: `udonge` is Reisen, `utsuho` Okuu, `chirno`
+  Cirno, `meirin` Meiling. The file name is the palette's name. New files show up the next time you
+  reach that character's palette step.
+- **Fallback**: each palette has the normal slot (0-7) the game actually sends. Players without
+  PaletteShare and spectators see that slot. The default is slot 0.
+- **Backup**: removing the mod in SokuLauncher deletes its folder, so PaletteShare keeps a copy in
+  `PaletteShare\backup\` in the game folder. Reinstall the mod and your palettes come back.
+
+### At character select
+
+Keys are the default keyboard ones; the on-screen hints show your own.
+
+- **Up/Down** scroll the list. The panel shows **Custom** (what PaletteShare users see) and
+  **Fallback NN** (what others see).
+- **A** (random select; Pad3 on a gamepad) changes the highlighted palette's fallback: Up/Down pick a
+  slot, Z or A saves, X cancels. On the character grid, A still picks a random character.
+- Offline, both sides get the picker (player 2 in VS Player, or player 1 for the CPU or the
+  Practice dummy). The last choice is remembered per character.
+
+### The palette menu
+
+Profile → Deck Construction → a character → **C**. It lists that character's palettes with large
+previews. Left/Right change the fallback, C resets it to the character default. The "Character
+default" row sets that default. "Open palette folder" opens the folder.
+
+### Palette mods (shady-loader packages)
+
+Slots a palette mod replaces in your game show as "Default 03 (mod)" in the list and "Mod 03" in the
+menu. They work like your own palettes, with that same slot as the fallback unless you change it.
+The fallback preview always shows the game's original colors, since that's what players without
+palette mods see. `[Picker] ShowOriginalPalettes=1` also lists the original colors as "Original 03".
+
+### Mirror matches
+
+Same rule as the game: a palette the other side already uses is skipped. If your palette's fallback
+slot is taken, the next slot is used for that match only, and the panel says so.
+
+### Supported files
+
+- `.pal`: the game's format (513 or 1025 bytes, e.g. a shady-loader `paletteNNN.pal`), the old
+  Palette Editor format (1024 bytes), JASC-PAL (GIMP, Aseprite) and RIFF PAL.
 - `.act`: Adobe color table (Photoshop).
-- `.bmp`: an indexed image (its color table is the palette), or a 16/24/32-bit image whose first 256
-  pixels (row by row from the top) are the colors. Uncompressed only.
+- `.bmp`, uncompressed: an indexed image's color table, or the first 256 pixels of a 16/24/32-bit
+  image. palette-picker swaps red and blue in 24-bit BMPs; PaletteShare doesn't.
 
-Every `.pal` that palette-picker reads works here too. One difference: palette-picker reads 24-bit
-BMP images with red and blue swapped, so such a file made to look right there shows those two colors
-swapped here (PaletteShare reads it correctly).
+Files that can't be read are counted in the picker ("N files skipped") and listed with the reason in
+the palette menu.
 
-A file PaletteShare can't read isn't silently ignored: the picker shows "N files skipped", and the
-palette menu lists each one with the reason (e.g. "compressed BMP (save it uncompressed)").
+### Backup details
 
-**At character select**, in the palette step (keyboard or gamepad; offline both sides get the
-picker: player 2 in VS Player, or player 1 choosing for the CPU or the Practice dummy):
-- Up/Down scroll through the 8 normal palettes and your own.
-- A panel shows the list and two previews: **Custom** (your palette, what PaletteShare users see)
-  and **Fallback NN** (the slot players without PaletteShare see). The fallback preview shows the
-  game's original colors, read from the game's own archives: if a palette mod (e.g. a shady-loader
-  package) replaces that slot in your game, players without palette mods still see the original,
-  and the panel says "original colors".
-- The **random-select key** (**A** on the default keyboard layout, Pad3 on a gamepad) changes the
-  highlighted palette's fallback: Up/Down pick a slot (the Fallback preview follows), A saves, X
-  cancels. This replaces the game's random palette in that step; on the character grid the key
-  still picks a random character.
-
-Keys below are the default keyboard ones (Z confirm, X cancel, C submenu, A random). The on-screen
-hints show your own bindings.
-
-**The palette menu**: Profile → deck construction → choose a character → **C**. It lists that
-character's palettes with their fallbacks and large previews ("Custom" / "Fallback"):
-- Left/Right change the highlighted palette's fallback.
-- C returns it to the character default.
-- The "Character default" row sets the default for every palette without its own (slot 0 unless
-  changed).
-- "Open palette folder" opens the folder in Explorer.
-
-**Mirror matches** (both sides the same character) work like the game's own rule: a palette the
-other side already uses is skipped in the list, just as the game skips the other side's slot. A
-different custom palette whose fallback slot is taken uses the next slot for that match only (the
-panel says "Default 05 taken, others see 06"), and nothing is saved. The two sides never end up
-looking the same.
-
-**Palette mods** (e.g. a shady-loader package replacing `paletteNNN.pal`): a slot that a palette
-mod replaces in your game is marked "(mod)" in the list (e.g. "Default 03 (mod)") and works like
-your own palettes: its panel shows **Mod** (your game's colors, what PaletteShare users see) next to
-**Fallback NN** (the original colors players without palette mods see). Its fallback is that same
-slot unless you change it with the random-select key, e.g. to show players without PaletteShare a
-different normal palette. The palette menu lists these slots as "Mod NN". With
-`[Picker] ShowOriginalPalettes=1` the list also offers the game's **original colors** of each
-replaced slot ("Original 03"), always sent as that slot.
-
-Each palette's **fallback** is the normal slot (0-7) your game actually sends. It's what players
-without PaletteShare, spectators and replays see, and the picker always shows it ("(default)" when
-it follows the character default). Changes are saved right away to the folder's `palettes.ini`.
-The picker remembers your last choice per character.
-
-## Controls and settings (`PaletteShare.ini`)
-
-- **Ctrl+P** toggles your opponent's custom palette on and off at any time: at character select
-  (their preview) and mid-match. A short "Opponent palettes: ON/OFF" notice confirms it. Use it if an
-  opponent's palette is hard to look at. Your choice stays until you toggle again or restart the
-  game. The key is configurable under `[Hotkey]`.
-- `[Display] ShowOpponentPalettes=0` starts with opponents' custom palettes hidden.
-- `[Replay] Storage=rep` keeps replay palettes inside the `.rep` instead of a `.meta.json` file next
-  to it (see Replays).
-- `[Picker] ShowOriginalPalettes=1` lists the original colors of slots a palette mod replaces
-  ("Original 03"), so you can still pick them.
-- `[Debug] Log=1` (the default) writes `PaletteShare.log` next to the DLL, at most 2 MB per run; the
-  previous run's log is kept as `PaletteShare.prev.log`. Send both when reporting a problem. They
-  include your opponents' IP addresses and ports; `Log=0` turns logging off.
-
-### Debug settings (for testing, not for normal play)
-
-These aren't in the default `PaletteShare.ini`; add them under `[Debug]` when testing:
-- `ForcePaletteLeft=<hash>` / `ForcePaletteRight=<hash>`: show a palette from the cache
-  (`cache\<hash>.pal`, the 32-digit hash is the file name) on that side, as if the opponent had sent
-  it, with the same checks and the Ctrl+P toggle. Works offline, so you can see how a palette looks
-  in a match. Replays are saved with it, but a replay being watched always shows what it recorded.
-- `HotkeyIgnoresFocus=1`: the toggle hotkey also works while the game window isn't focused (for
-  test scripts that press it from outside).
-
-## Safety
-
-- Received palettes only change colors. Each color keeps exactly the transparency of your own
-  normal palette for that slot, so a palette can't make a character invisible or see-through, or
-  draw solid boxes around sprites.
-- Packets are size-checked, and every palette is verified against its SHA-256-based hash before
-  use.
-- Players without PaletteShare ignore its packets (the game drops packet types it doesn't know).
-- Only your actual opponent's PaletteShare is talked to, and a peer can send at most 256 new
-  palettes per character select.
-- Before patching the game, PaletteShare checks what it replaces; if another mod changed that spot
-  in an unexpected way, the matching feature stays off (the log says which) instead of breaking the
-  other mod.
+The backup is updated at startup and whenever a character's palettes change. It includes
+`palettes.ini`, which holds the fallbacks. After a reinstall, the first start copies it back, and
+newer files win. Palettes you delete are moved to `backup\_removed\`, never deleted. To remove them
+for good, delete the `backup` folder too. Updating the mod never touches your palettes. If the game
+folder can't be written to, there's no backup, and the log says so. Libraries of earlier test builds
+(`PaletteShare\palettes` in the game folder) are brought over once and become the backup.
 
 ## Replays
 
-When a replay is saved (by the game, or by SaveRep), PaletteShare keeps the custom palettes both
-sides were shown with, about 1 KB each (2 KB for a 32-bit one), nothing if neither side had one.
-Watching the replay with PaletteShare (from the replay menu or ReplayDnD) shows them again, with
-the same transparency check as online and the Ctrl+P toggle. Players without PaletteShare see the
-normal palettes.
+Saved replays keep both sides' custom palettes, about 1 KB each, and show them again when watched
+with PaletteShare. By default they're stored in `<replay name>.meta.json` next to the `.rep`; share
+both files. `[Replay] Storage=rep` appends them to the `.rep` itself instead; the game ignores the
+extra data. Watching reads both. The `.meta.json` has one key per mod, so other mods can use it too.
 
-Where they're kept is set by `[Replay] Storage`:
-- `sidecar` (default): in `<replay name>.meta.json` next to the `.rep`, which stays exactly as the
-  game wrote it. To share a replay with its palettes, share both files.
-- `rep`: appended to the `.rep` itself, after the game's data (the game ignores it), so the one file
-  carries them.
+## Settings (`PaletteShare.ini`)
 
-Watching always looks in both places. The `.meta.json` file is plain JSON with one key per mod
-(PaletteShare uses `"PaletteShare"`), so other mods can keep their own data in the same file.
+| Setting | |
+|---|---|
+| `[Hotkey] Modifier`, `Key` | the toggle hotkey (default Ctrl+P). Remove `Key` for no hotkey, `Modifier` for the key alone |
+| `[Display] ShowOpponentPalettes=0` | start with opponents' palettes hidden |
+| `[Picker] ShowOriginalPalettes=1` | list original colors of slots a palette mod replaces |
+| `[Replay] Storage=sidecar\|rep` | where replay palettes go |
+| `[Debug] Log=1` | `PaletteShare.log` (max 2 MB; previous run in `PaletteShare.prev.log`). Includes opponents' IP addresses. Send both logs with bug reports. |
 
-## Current limits
+Testing only, under `[Debug]`:
+- `ForcePaletteLeft=<hash>` / `ForcePaletteRight=<hash>` show a cached palette (`cache\<hash>.pal`)
+  on that side, also offline.
+- `HotkeyIgnoresFocus=1` lets the hotkey work without the game focused.
 
-- **Spectators** see the normal palettes (planned for 1.1).
-- **palette-picker**: when it's loaded, PaletteShare's own picker and palette menu turn off and
-  palette-picker chooses your palette; PaletteShare still shares it.
-- **Soku2 and other added characters** aren't supported or tested: PaletteShare leaves them alone
-  (only the 20 normal characters get the picker, the palette menu and palette sharing).
-- The opponent's custom palette appears in the character-select preview once it has arrived
-  (usually a fraction of a second after they scroll to it).
+## Safety
 
-## Install
+- Received palettes only change colors. Transparency always comes from your own palette, so nobody
+  can make a character invisible or draw boxes around sprites.
+- Packets are size-checked. Each palette is verified against its hash. At most 256 new palettes per
+  character select, only from your actual opponent.
+- Players without the mod ignore its packets.
+- If another mod already patched a spot PaletteShare needs, that feature turns off and the log says
+  which, so the other mod keeps working.
 
-Copy the `PaletteShare` folder from the zip into `modules\` in your game folder and enable the mod
-in the mod loader (SokuLauncher or SWRSToys). Runs on Windows 7 and later, and under Wine/Proton.
-The first start creates `PaletteShare\palettes\<character>\` in the game folder for your palettes
-(`WHERE-ARE-MY-PALETTES.txt` in the mod folder says the same). Received palettes are kept in
-`modules\PaletteShare\cache\` (about 0.5 KB each; the oldest are removed past 2000).
+## Limits
+
+- Spectators see the normal palettes (planned for 1.1).
+- With palette-picker loaded, its picker is used instead of PaletteShare's. Palettes are still
+  shared.
+- Soku2 and other added characters are left alone.
+- The opponent's palette shows in their preview once it arrives, usually within a fraction of a
+  second.
+- Received palettes are cached in `modules\PaletteShare\cache\` (about 0.5 KB each, at most 2000).
 
 ## Build
 
@@ -173,6 +125,5 @@ build.bat
 ```
 
 Needs Visual Studio (x86 C++ tools), CMake 3.20+ and Ninja. Output: `build\PaletteShare.dll`.
-`tools\test.bat` builds and runs the tests (hashing, protocol, palette files, replay metadata,
-plus a fuzz pass over every parser).
-SokuLib is a submodule on its `dev` branch. See [docs/DESIGN.md](docs/DESIGN.md) for how it works.
+`tools\test.bat` runs the tests. SokuLib is a submodule on its `dev` branch. See
+[docs/DESIGN.md](docs/DESIGN.md) for how it works.

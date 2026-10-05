@@ -6,8 +6,8 @@
 #include "palette.hpp"
 #include "palettefile.hpp"
 
-// The player's own palettes: <game folder>/PaletteShare/palettes/<character>/ (and the mod folder's
-// palettes/<character>/, see setLibraryRoots) hold .pal (game format, JASC-PAL, RIFF PAL, or the old
+// The player's own palettes: modules/PaletteShare/palettes/<character>/ (backed up outside the mod
+// folder, see backup.hpp) hold .pal (game format, JASC-PAL, RIFF PAL, or the old
 // Palette Editor's 256 raw 32-bit colors), .act (Photoshop color table) and .bmp (indexed color
 // table, or the first 256 pixels of a 16/24/32-bit image) files. Files that can't be read are
 // listed with the reason, so the player can see why. palettes.ini in the library folder stores the
@@ -50,8 +50,7 @@ namespace ps {
 	struct CharacterLibrary {
 		int charId = -1;
 		std::wstring folderName;
-		std::filesystem::path folder;     // the library's folder: palettes.ini lives here
-		std::filesystem::path modFolder;  // the mod folder's palettes/<character>, also read (or empty)
+		std::filesystem::path folder;     // the character's folder: palettes.ini lives here
 		int defaultFallback = 0;
 		std::vector<LibraryPalette> palettes;  // sorted by name
 		std::vector<SkippedFile> skipped;      // palette-like files that couldn't be read
@@ -60,11 +59,8 @@ namespace ps {
 		int lastSlot[2] = {-1, -1};
 	};
 
-	// Palettes are read from `main` (<game folder>\PaletteShare\palettes when possible, which
-	// removing or updating the mod never touches) and from `mod` (modules\PaletteShare\palettes); a file in
-	// `main` wins over one of the same name in `mod`. palettes.ini is kept in `main`; the first time
-	// a character is used there, the mod folder's palettes.ini is copied over.
-	void setLibraryRoots(const std::filesystem::path &main, const std::filesystem::path &mod);
+	// The library's folder (modules\PaletteShare\palettes); creates the characters' folders.
+	void setLibraryRoot(const std::filesystem::path &root);
 	// Loaded (and cached) on first use; rescanned when the folder changed since.
 	CharacterLibrary library(int charId);
 	// who: 0 = the player's own choice, 1 = player 2 offline.
