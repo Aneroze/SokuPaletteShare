@@ -30,7 +30,17 @@ namespace ps::picker {
 		constexpr int MAX_STEER_PRESSES = 16;       // then the slot is unreachable (shouldn't happen)
 		constexpr int PLAYER_INFO = 0xC;            // Select: PlayerInfo[2], 0x20 bytes each:
 		constexpr int INFO_SIZE = 0x20, INFO_CHARACTER = 0x8, INFO_PALETTE = 0xD;  // (see 0x4206E1)
-		constexpr int STEER_TIMEOUT_FRAMES = 90;    // a press the game never applied
+		// Our presses are held like a key until the game applies them: online a one-frame press can
+		// get lost on the way (packet loss), a held one can't. At most MAX_HOLD_FRAMES (the game
+		// repeats a direction held for 30), then released for at least MIN_RELEASE_FRAMES online so
+		// the next one reads as a new press.
+		constexpr int MAX_HOLD_FRAMES = 20;
+		constexpr int MIN_RELEASE_FRAMES = 3;
+		constexpr int STEER_TIMEOUT_FRAMES = 60;    // a palette step the game never applied: again
+		constexpr int CONFIRM_TIMEOUT_FRAMES = 90;  // a confirm the game never applied: again,
+		constexpr int CONFIRM_RETRIES = 2;          //   at most this many times
+		constexpr DWORD WHEEL_SOUND_CALL = 0x4206BE;  // palette step: playSEWaveBuffer(0x27) when the
+		                                              // deck or palette cursor moved
 
 		enum class Steer { Idle, Pressed, Waiting };
 
@@ -48,6 +58,8 @@ namespace ps::picker {
 			Steer steer = Steer::Idle;
 			int wheelAtPress = -1;
 			int waitFrames = 0;
+			int pressDir = 0;        // the press being held: +1 down, -1 up
+			int releaseFrames = 0;
 			int presses = 0;
 			int unreachable = -1;    // fallback slot the wheel couldn't reach
 			// Mirror match (both sides the same character, the other one chosen): the game won't
@@ -59,6 +71,7 @@ namespace ps::picker {
 			// after the netplay delay; until then the list and the wheel must not move, or the slot
 			// (and our confirmed palette) would change under the confirm.
 			int confirmSent = -1;
+			int confirmRetries = 0;
 			bool inSubmenu = false;  // a submenu was open over the select screen last frame
 			bool editing = false;    // D: changing the highlighted palette's fallback
 			const SokuLib::KeymapManager *keys = nullptr;  // drives this pick (for the key hints)
@@ -116,6 +129,16 @@ namespace ps::picker {
 		bool disabled() { return game::palettePickerLoaded(); }
 
 		void (__fastcall *orig_setInputs)(void *mgr, void *edx) = nullptr;
+
+		// The palette step's move sound comes from us for the sides we drive: one per move of our
+		// list, right away, instead of the game's one per wheel step (none for a list move the wheel
+		// doesn't need, several later for one that needs several). Off if the hook isn't in.
+		DWORD g_origWheelSound = 0;
+		void moveSound()
+		{
+			if (g_origWheelSound)
+				SokuLib::playSEWaveBuffer(game::SE_MOVE);
+		}
 
 		SokuLib::Select *selectScene() { return game::selectScene(); }
 
@@ -276,8 +299,10 @@ namespace ps::picker {
 		void driveEdit(Pick &pick, SokuLib::KeyInput &in)
 		{
 			auto custom = pick.custom();
-			if (int move = menuMove(in.verticalAxis))
+			if (int move = menuMove(in.verticalAxis)) {
 				pick.editSlot = (pick.editSlot + move + 8) % 8;
+				moveSound();
+			}
 			if (in.d == 1 || in.a == 1) {
 				pick.editing = false;
 				if (custom->fallback != pick.editSlot || custom->fallbackIsDefault) {
@@ -338,15 +363,24 @@ namespace ps::picker {
 			// Confirm sent, the game hasn't applied it yet: keep everything still (B, the deck keys
 			// and C still reach the game).
 			if (pick.confirmSent >= 0) {
-				if (++pick.confirmSent <= STEER_TIMEOUT_FRAMES) {
+				if (++pick.confirmSent <= CONFIRM_TIMEOUT_FRAMES) {
 					in.verticalAxis = 0;
-					in.a = 0;
 					in.d = 0;
-					bits &= ~(1 | 2 | 16 | 128);
+					bits &= ~(1 | 2 | 128);
+					// A stays held like a key until the game takes it (we stop here once it did).
+					bool hold = pick.confirmSent < MAX_HOLD_FRAMES;
+					in.a = hold ? pick.confirmSent + 1 : 0;
+					bits = hold ? (bits | 16) : (bits & ~16);
 					return true;
 				}
-				log("picker: the confirm wasn't applied, picking again");
 				pick.confirmSent = -1;
+				if (pick.confirmRetries < CONFIRM_RETRIES) {
+					pick.confirmRetries++;
+					pick.pendingConfirm = true;
+					log("picker: the confirm wasn't applied, sending it again");
+				} else {
+					log("picker: the confirm wasn't applied, picking again");
+				}
 			}
 			bool editing = pick.editing;
 
@@ -357,12 +391,15 @@ namespace ps::picker {
 				if (int move = menuMove(in.verticalAxis)) {
 					pick.index = pick.step(pick.index, move);
 					pick.previewDirty = true;
+					moveSound();
 					pick.presses = 0;
 					pick.unreachable = -1;
 					pick.confirmed = false;
 				}
-				if (in.a == 1)
+				if (in.a == 1) {
 					pick.pendingConfirm = true;
+					pick.confirmRetries = 0;
+				}
 				// D edits the highlighted palette's fallback (it replaces the game's random palette).
 				if (in.d == 1 && pick.custom() && pick.custom()->originalSlot < 0) {
 					pick.editing = true;
@@ -378,11 +415,26 @@ namespace ps::picker {
 			int emitV = 0;
 			switch (pick.steer) {
 			case Steer::Pressed:
-				pick.steer = Steer::Waiting;  // release frame
+				if (wheel == pick.wheelAtPress && ++pick.waitFrames < MAX_HOLD_FRAMES) {
+					emitV = pick.pressDir * (pick.waitFrames + 1);  // counts up like a held key
+					break;
+				}
+				pick.steer = Steer::Waiting;  // applied (or held long enough): release
+				pick.releaseFrames = 0;
 				break;
 			case Steer::Waiting:
-				if (wheel != pick.wheelAtPress || ++pick.waitFrames > STEER_TIMEOUT_FRAMES)
+				pick.releaseFrames++;
+				if (wheel != pick.wheelAtPress) {
+#ifdef PS_STEER_LOG
+					if (pick.releaseFrames == 1)
+						log("steer: applied after %d frames, wheel %d (target %d)", pick.waitFrames, wheel, target);
+#endif
+					if (pick.releaseFrames >= (online() ? MIN_RELEASE_FRAMES : 1))
+						pick.steer = Steer::Idle;
+				} else if (++pick.waitFrames > STEER_TIMEOUT_FRAMES) {
+					log("picker: a palette step wasn't applied (wheel still on %d), trying again", wheel);
 					pick.steer = Steer::Idle;
+				}
 				break;
 			case Steer::Idle:
 				if (wheel != target && pick.unreachable != target) {
@@ -392,7 +444,11 @@ namespace ps::picker {
 						break;
 					}
 					int forward = (target - wheel + 8) % 8;
-					emitV = forward <= 4 ? 1 : -1;
+					pick.pressDir = forward <= 4 ? 1 : -1;
+					emitV = pick.pressDir;
+#ifdef PS_STEER_LOG
+					log("steer: press %+d wheel %d target %d (real axis %d)", emitV, wheel, target, in.verticalAxis);
+#endif
 					pick.steer = Steer::Pressed;
 					pick.wheelAtPress = wheel;
 					pick.waitFrames = 0;
@@ -480,6 +536,34 @@ namespace ps::picker {
 				in = o.real;  // whatever happened, the game gets the player's own keys
 			o.written = in;
 			o.active = memcmp(&o.real, &o.written, sizeof(in)) != 0;
+		}
+
+		// The game's palette step played its move sound: moved = bit 0 deck cursor, bit 1 palette
+		// wheel. Whether to let it play.
+		bool __cdecl onWheelSound(int moved, int side)
+		{
+			if (disabled() || (moved & 3) != 2 || side < 0 || side > 1)
+				return true;  // a deck move, or not ours
+			std::lock_guard lock(g_mutex);
+#ifdef PS_STEER_LOG
+			log("steer: wheel sound side=%d %s", side, g_picks[side].active ? "muted" : "played");
+#endif
+			return !g_picks[side].active;  // our steering: the list move already played it
+		}
+
+		__declspec(naked) void wheelSoundStub()
+		{
+			__asm {
+				push ebp  // the side the select loop is on
+				push eax  // what moved (0x41FC70's result)
+				call onWheelSound
+				add esp, 8
+				test al, al
+				jz skip
+				jmp g_origWheelSound  // playSEWaveBuffer(0x27), still on the stack
+			skip:
+				ret
+			}
 		}
 
 		// --- drawing ---------------------------------------------------------------------------
@@ -724,6 +808,7 @@ namespace ps::picker {
 	void install()
 	{
 		orig_setInputs = patch::call(SETINPUTS_CALL, onSetInputs, "picker: input");
+		g_origWheelSound = patch::call(WHEEL_SOUND_CALL, reinterpret_cast<const void *>(&wheelSoundStub), "picker: palette step sound");
 		hookRender<0>(&SokuLib::VTable_Select);
 		hookRender<1>(&SokuLib::VTable_SelectServer);
 		hookRender<2>(&SokuLib::VTable_SelectClient);

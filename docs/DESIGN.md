@@ -165,7 +165,13 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
   Left/Right = deck, C = profile submenu, D = random, so there's no free key. We drive the wheel
   through the local menu KeymapManager (`0x8986A8`) at the SetInputs call site `0x40A45D`: the
   decoded input at +0x38 plus the netcode bits at +0x62. One press at a time, waiting until the game
-  applied it. Verified offline (Blue Reimu fallback 3 → wheel 3; Green Reimu default 0 → wheel 0)
+  applied it. 2026-10-05: presses are held like a key (counting up) until the wheel moves, at most
+  20 frames (the game's InputHandler `0x41FBF0` steps on 1 and repeats only past 30), then released
+  for 3 frames online: a one-frame press got lost with packet loss (relay 60±60 ms, 15% loss: 6
+  timeouts of 1.5 s in a 5 s hold; held: none in 23 presses). A confirm is held the same way and
+  re-sent (twice at most) if the game didn't take it within 90 frames. The step's move sound
+  (`push 0x27; call` at `0x4206BE`, eax = what moved, ebp = side) is muted for sides we drive; we
+  play it once per list move instead (a list move whose fallback is the wheel's slot made none). Verified offline (Blue Reimu fallback 3 → wheel 3; Green Reimu default 0 → wheel 0)
   and in netplay: both games hold slot 3 for the host's Reimu (`0x899D15`). A guest with
   PaletteShare shows Blue Reimu; a guest without it shows vanilla palette 3 (purple). The preview
   sprite shows the highlighted custom palette (rebuilt via `0x41FE60`).
