@@ -9,6 +9,7 @@
 #include "library.hpp"
 #include "menu.hpp"
 #include "net.hpp"
+#include "palettefile.hpp"
 #include "picker.hpp"
 #include "replaymeta.hpp"
 #include "protocol.hpp"
@@ -92,14 +93,16 @@ static void loadConfig(const std::filesystem::path &ini)
 		ps::config.showOpponentPalettes, ps::config.showOriginalPalettes, ps::config.toggleModifier, ps::config.toggleKey,
 		ps::config.toggleKey ? "" : " (no hotkey)");
 
+	// A palette file, absolute or relative to the mod folder.
 	const wchar_t *keys[2] = {L"ForcePaletteLeft", L"ForcePaletteRight"};
 	for (int side = 0; side < 2; side++) {
-		auto value = iniString(ini, L"Debug", keys[side]);
-		if (value.empty())
+		wchar_t value[MAX_PATH];
+		GetPrivateProfileStringW(L"Debug", keys[side], L"", value, MAX_PATH, ini.c_str());
+		if (!*value)
 			continue;
-		ps::config.forcePalette[side] = ps::PaletteHash::fromHex(value);
-		if (!ps::config.forcePalette[side])
-			ps::log("config: [Debug] %ls is not a 32-digit hex hash, ignored", keys[side]);
+		const char *why = nullptr;
+		ps::config.forcePalette[side] = ps::readPaletteFile(ini.parent_path() / value, &why);
+		ps::log("config: [Debug] %ls=%ls %s%s", keys[side], value, ps::config.forcePalette[side] ? "loaded" : "not read: ", why ? why : "");
 	}
 }
 
@@ -125,7 +128,6 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 		return false;
 	}
 
-	ps::cache.setDirectory(dir / L"cache");
 	auto library = dir / L"palettes";
 	auto data = gameFolderData();
 	ps::log("library: %ls, backup: %ls", library.c_str(), data.empty() ? L"none (the game folder isn't writable)" : (data / L"backup").c_str());

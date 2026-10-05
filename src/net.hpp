@@ -6,9 +6,10 @@
 //
 // While both players are in a netplay session (character select, loading, battle), each side
 // offers the palette its own character is shown with: captured from the character-select
-// preview as the player browses, and again when the character loads. A modded peer stores what
-// it receives in the cache and uses it when that character loads. Peers without the mod ignore
-// the packets (see protocol.hpp), and nothing is sent to them after the handshake times out.
+// preview as the player browses, and again when the character loads. A modded peer keeps what
+// it receives and uses it when that character loads (spectators get both sides from the game
+// they watch through). Peers without the mod ignore the packets (see protocol.hpp), and nothing
+// is sent to them after the handshake times out.
 
 namespace ps::net {
 	void install();
@@ -23,12 +24,12 @@ namespace ps::net {
 	// again: send it once more even if it's the current offer and was acknowledged (at load).
 	void offerLocal(int charId, int slot, const Palette &palette, const PaletteHash &hash, bool again = false);
 
-	// The palette the opponent offered for this character and slot, if received (it is in the
-	// cache by then).
-	std::optional<PaletteHash> remotePalette(int charId, int slot);
-	// The palette the opponent shows this character with right now, whatever the slot (at character
-	// select their slot moves one step at a time towards the one their palette falls back to).
-	std::optional<PaletteHash> remoteShown(int charId);
+	// What we received for a side (the opponent's, or either when spectating): the palette for this
+	// character and slot, if any.
+	std::optional<Palette> received(int side, int charId, int slot);
+	// The palette that side shows this character with right now, whatever the slot (at character
+	// select the opponent's slot moves one step at a time towards the one their palette falls back to).
+	std::optional<Palette> receivedNow(int side, int charId);
 
 	enum class PeerStatus {
 		NotInNetplay,
@@ -42,9 +43,6 @@ namespace ps::net {
 	// Player in netplay: a side's character loaded (own = our palette for our side). Spectators
 	// watching through us get what each side is shown with.
 	void sideLoaded(int side, int charId, int slot, const Palette *own);
-	// Spectating: the palette that side's player is shown with, for this character and slot, if
-	// the game we watch through sent it (it is in the cache by then).
-	std::optional<PaletteHash> watchedPalette(int side, int charId, int slot);
 
 	// Bumped whenever a new remote palette has been received; lets the renderer pick up a palette
 	// that arrived after the character had already loaded.

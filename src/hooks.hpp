@@ -16,16 +16,15 @@ namespace ps {
 		// mid-match. Modifier 0 = key alone.
 		int toggleModifier = VK_CONTROL;
 		int toggleKey = 'P';
-		// [Debug] ForcePaletteLeft / ForcePaletteRight: hash of a cached palette to show on that
-		// side, as if the opponent had sent it (it goes through the same checks and the hotkey).
-		std::optional<PaletteHash> forcePalette[2];
+		// [Debug] ForcePaletteLeft / ForcePaletteRight: a palette file to show on that side, as if
+		// the opponent had sent it (it goes through the same checks and the hotkey).
+		std::optional<Palette> forcePalette[2];
 		// [Debug] HotkeyIgnoresFocus: react to the hotkey even when the game isn't the foreground
 		// window (lets test scripts press a dummy key like F24 without stealing focus).
 		bool hotkeyIgnoresFocus = false;
 	};
 
 	extern Config config;
-	extern PaletteCache cache;
 
 	void installHooks();
 

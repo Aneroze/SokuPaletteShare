@@ -1,39 +1,33 @@
-"""Make two obviously recolored test palettes from cached vanilla ones and put them in the
-PaletteShare caches of the given game installs (named by their PaletteShare hash).
+"""Make two obviously recolored test palettes from the game's own Reimu and Sanae palette 000
+(game format .pal: 1 byte bpp + 256 16-bit colors, e.g. from a shady-loader package or TextureDump).
 
-  python make_test_palettes.py <Soku folder> [<another Soku folder> ...]
+  python make_test_palettes.py <reimu palette000.pal> <sanae palette000.pal> <output folder>
 
-The first folder's cache must already hold Reimu's and Sanae's palette 000 (play them once)."""
-import hashlib, os, shutil, struct, sys
+Writes "Blue Reimu.pal" and "Inverted Sanae.pal" there: put them in a library folder
+(modules\PaletteShare\palettes\reimu, ...\sanae) or point [Debug] ForcePaletteLeft/Right at them."""
+import os, struct, sys
 
-INSTALLS = sys.argv[1:]
-if not INSTALLS:
+if len(sys.argv) != 4:
     sys.exit(__doc__)
-SRC_CACHE = os.path.join(INSTALLS[0], "modules", "PaletteShare", "cache")
+reimu_file, sanae_file, out = sys.argv[1:]
 
-def load(h):
-    d = open(os.path.join(SRC_CACHE, h + ".pal"), "rb").read()
-    assert d[0] == 16 and len(d) == 513
+def load(path):
+    d = open(path, "rb").read()
+    assert d[0] == 16 and len(d) == 513, path + ": not a 16-bit game palette"
     return list(struct.unpack("<256H", d[1:]))
 
-def save(colors):
-    data = bytes([16]) + struct.pack("<256H", *colors)
-    h = hashlib.sha256(data).digest()[:16].hex()
-    for inst in INSTALLS:
-        d = os.path.join(inst, r"modules\PaletteShare\cache")
-        os.makedirs(d, exist_ok=True)
-        open(os.path.join(d, h + ".pal"), "wb").write(data)
-    return h
+def save(name, colors):
+    os.makedirs(out, exist_ok=True)
+    path = os.path.join(out, name)
+    open(path, "wb").write(bytes([16]) + struct.pack("<256H", *colors))
+    print(path)
 
 def split(c): return c >> 15, (c >> 10) & 31, (c >> 5) & 31, c & 31
 def join(a, r, g, b): return a << 15 | r << 10 | g << 5 | b
 
-# Reimu palette000 -> red/blue swapped ("blue Reimu")
-reimu = load("a494bdaff4fe1fb76679057eb8fd060e")
-blue = [c if i == 0 else join(split(c)[0], split(c)[3], split(c)[2], split(c)[1]) for i, c in enumerate(reimu)]
-# Sanae palette000 -> color negative ("inverted Sanae"), alpha bit and index 0 kept
-sanae = load("438ea549291e2dc0c8ecdcbc9b59f669")
-inv = [c if i == 0 else join(split(c)[0], 31 - split(c)[1], 31 - split(c)[2], 31 - split(c)[3]) for i, c in enumerate(sanae)]
-
-print("blue_reimu", save(blue))
-print("inverted_sanae", save(inv))
+# Reimu -> red/blue swapped ("blue Reimu")
+reimu = load(reimu_file)
+save("Blue Reimu.pal", [c if i == 0 else join(split(c)[0], split(c)[3], split(c)[2], split(c)[1]) for i, c in enumerate(reimu)])
+# Sanae -> color negative ("inverted Sanae"), alpha bit and index 0 kept
+sanae = load(sanae_file)
+save("Inverted Sanae.pal", [c if i == 0 else join(split(c)[0], 31 - split(c)[1], 31 - split(c)[2], 31 - split(c)[3]) for i, c in enumerate(sanae)])

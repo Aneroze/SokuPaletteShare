@@ -37,9 +37,10 @@ always side 0 (`mainMode` VSCLIENT = 4), the client side 1 (VSSERVER = 5).
 
 ## Core model
 
-- **Palettes are content-addressed:** hash = first 16 bytes of SHA-256 over the serialized
-  palette (bpp byte + colors). `cache/<hash>.pal` holds every palette we load or receive. Loads
-  re-verify the hash.
+- **Palettes are identified by hash:** the first 16 bytes of SHA-256 over the serialized palette
+  (bpp byte + colors). Received palettes are verified against it and kept in memory, by value, per
+  side (nothing on disk: a palette is about 0.5 KB, so sending it again in a later session costs
+  nothing worth a cache).
 - **We never need to know which palettes are "custom".** We share whatever the game actually
   shows for the local player's character.
 - **Per side, at load:** `vanilla` = what this game would show, and `custom` = the opponent's
@@ -63,18 +64,19 @@ buffer is 1024 bytes, so palettes go in chunks of ≤900 bytes (16-bit: 1 packet
   (INIT_REQUEST with PLAY_REQU) in the last 60 s; spectators ask to spectate and aren't counted.
   A spectator HELLO (role spectator) is answered by whoever the spectator's game watches through,
   if that address asked the game to spectate (INIT_REQUEST with SPECTATE_REQU, last 30 min).
-- **PALETTE** `{seq, charId, slot, hash, totalSize, offset, len, bytes}`: our current palette,
-  resent every 500 ms until acknowledged (max 60 times). `seq` numbers our offers, so a late or
-  reordered datagram never replaces a newer offer. The receiver reassembles (max 4 in flight),
-  checks charId < 256, slot < 8, the sizes and the hash, caches it (max 256 new palettes per
-  character select; a palette equal to the slot's original doesn't count), and keeps the newest offer per character (character-select previews) and per
-  character and slot (what the opponent loads with).
-- **SIDE** `{side, seq, charId, slot, hash, totalSize, offset, len, bytes}` (to spectators): what
-  that side is shown with. A player node serves its own palette for its side and the opponent's
-  raw offer for theirs; a spectator serves what it received, so relays work the same way. Sent at
-  each change (character load, a late palette) and to a spectator once it joined, resent every
-  500 ms until acknowledged (max 20 times). Up to 16 spectators per node; when full, one that never
-  joined makes room, joined ones are never dropped.
+- **PALETTE** `{side, seq, charId, slot, hash, totalSize, offset, len, bytes}` (protocol v3): what
+  that side is shown with. A player sends its own side's to the opponent (as the player browses,
+  and again at load). Any node a spectator watches through sends it both sides': a player node its
+  own palette and the opponent's raw offer, a spectator what it received, so relays work the same
+  way (sent at each change and once a spectator joined). Each is resent every 500 ms until
+  acknowledged (60 times to the opponent, 20 to a spectator; one `Send` record and one resend
+  loop for both). `seq` numbers what the sender sends, so a late or reordered datagram never
+  replaces a newer palette. The receiver accepts its opponent's side from the opponent and either
+  side from the node it watches through, reassembles (max 4 in flight), checks side, charId < 256,
+  slot < 8, the sizes and the hash (max 256 new palettes per character select, per match when
+  spectating; a palette equal to the slot's original doesn't count), and keeps the newest per side
+  and character (character-select previews) and per side, character and slot (what loads).
+  Up to 16 spectators per node; when full, one that never joined makes room.
 - **Spectator handshake**: HELLO (role spectator) → HELLO reply with a random u32 cookie (at most
   one reply per address per 500 ms; the same cookie until it joins) → **JOIN** `{cookie}` → palettes.
   A forged sender address never sees the cookie, so it gets nothing but small HELLO replies (no
@@ -236,8 +238,7 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
   through `guarded` (src/guard.hpp); the game has no handler for C++ exceptions.
 - **Threads**: the loader thread (character loads), the game thread (select, battle, menus), the
   game's receive thread (our recvfrom hook) and our network thread. The receive thread only parses
-  and queues: sends go through an outbox and cache writes through a queue, both handled outside
-  the network lock.
+  and queues: sends go through an outbox, handled outside the network lock.
 - **Windows 7**: hashing is built in (src/sha256.cpp); win7.asm/win7.cpp replace the three Windows
   8 imports the C++ library brings (GetSystemTimePreciseAsFileTime, CreateFile2, CopyFile2) with
   stand-ins that fall back to older functions. Check with `dumpbin /imports` after toolset updates.

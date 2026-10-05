@@ -19,6 +19,11 @@
 // packets after it returns (giuroll hooks 0x41DAEA). We send through the game's sendto import
 // (0x857290) so mods that relay or rewrite traffic (Autopunch, InGameHostlist) also see ours.
 // Hooks on these imports chain: we keep whatever was there before us.
+//
+// One kind of palette packet (PALETTE: side, seq, character, slot, hash, bytes) goes both ways:
+// a player sends its own side's to the opponent, and any node a spectator watches through sends it
+// both sides'. Each is resent until acknowledged (Send), and received palettes are reassembled,
+// checked and kept by value per side (Received), whoever sent them.
 
 namespace ps::net {
 	namespace {
@@ -26,11 +31,12 @@ namespace ps::net {
 		constexpr DWORD IAT_SENDTO = 0x857290;
 		constexpr ULONGLONG HELLO_INTERVAL_MS = 500;
 		constexpr int HELLO_MAX_TRIES = 40;       // ~20 s, then assume the peer has no mod
-		constexpr ULONGLONG OFFER_INTERVAL_MS = 500;
-		constexpr int OFFER_MAX_SENDS = 60;       // resend until acked, up to ~30 s
+		constexpr ULONGLONG RESEND_INTERVAL_MS = 500;
+		constexpr int OFFER_MAX_SENDS = 60;       // to the opponent, until acknowledged (~30 s)
+		constexpr int SIDE_MAX_SENDS = 20;        // to a spectator, until acknowledged
 		constexpr size_t MAX_PENDING = 4;
-		// New custom palettes from the opponent per character select (a palette equal to the slot's
-		// original doesn't count): a peer can't fill our cache.
+		// New custom palettes accepted per character select (per match when spectating); a palette
+		// equal to the slot's original doesn't count. Keeps a peer from filling our memory.
 		constexpr int MAX_NEW_PALETTES = 256;
 		constexpr int MAX_IGNORED_LOGS = 3;  // "ignored a HELLO" lines per session
 		constexpr uint8_t GAME_INIT_REQUEST = 0x05;  // the game's join packet: type, gameId[16],
@@ -38,7 +44,6 @@ namespace ps::net {
 		constexpr uint8_t PLAY_REQUEST = 1;
 		constexpr uint8_t SPECTATE_REQUEST = 0;
 		constexpr size_t MAX_SPECTATORS = 16;        // modded spectators we serve at once
-		constexpr int SIDE_MAX_SENDS = 20;            // per palette and spectator, until acknowledged
 		constexpr ULONGLONG SPECTATOR_HELLO_GAP_MS = 500;  // at most one HELLO reply per address this often
 		constexpr int JOIN_MAX_SENDS = 20;            // spectating: JOIN until a palette arrives
 		constexpr ULONGLONG SPECTATE_REQUEST_TTL_MS = 30 * 60 * 1000;
@@ -49,19 +54,41 @@ namespace ps::net {
 
 		RecvFrom orig_recvfrom = nullptr;
 
-		struct Offer {
-			uint32_t seq;
-			int charId;
-			int slot;
+		// A palette we send, resent until the receiver acknowledges this very one (seq and hash).
+		struct Send {
+			uint32_t seq = 0;
+			int charId = -1;
+			int slot = -1;
 			PaletteHash hash;
 			std::vector<std::vector<uint8_t>> packets;
-			bool acked = false;
+			bool acked = true;
 			int sends = 0;
 			ULONGLONG nextSend = 0;
 		};
 
+		Send makeSend(int side, uint32_t seq, int charId, int slot, const PaletteHash &hash, const std::vector<uint8_t> &bytes)
+		{
+			return Send{seq, charId, slot, hash,
+				proto::makePalette(static_cast<uint8_t>(side), seq, static_cast<uint16_t>(charId), static_cast<uint8_t>(slot), hash, bytes), false};
+		}
+
+		bool acknowledge(Send &send, const proto::Ack &ack)
+		{
+			if (send.acked || send.seq != ack.seq || !(send.hash == ack.hash))
+				return false;
+			send.acked = true;
+			return true;
+		}
+
+		// A palette received for a side, in the cache-free form we use it in.
+		struct Received {
+			uint32_t seq = 0;
+			int slot = -1;
+			PaletteHash hash;
+			Palette palette;
+		};
+
 		struct Pending {
-			int side;  // -1: from the opponent, else a side's palette from upstream (spectating)
 			uint32_t seq;
 			int charId;
 			int slot;
@@ -69,12 +96,6 @@ namespace ps::net {
 			std::vector<bool> have;
 			size_t missing;
 			ULONGLONG started;
-		};
-
-		struct RemoteEntry {
-			uint32_t seq = 0;
-			int slot = -1;
-			PaletteHash hash;
 		};
 
 		std::mutex g_mutex;
@@ -85,16 +106,21 @@ namespace ps::net {
 		int g_helloTries = 0;
 		ULONGLONG g_sessionStart = 0;
 		ULONGLONG g_nextHello = 0;
-		std::optional<Offer> g_offer;
-		std::map<std::array<uint8_t, 16>, Pending> g_pending;
-		// What the opponent offered, by offer number, so a late or reordered datagram never replaces a
-		// newer offer: the latest per character (what they show right now, for previews) and the
-		// latest per character and slot (what they'll load with that slot).
-		std::map<int, RemoteEntry> g_remote;
-		std::map<std::pair<int, int>, RemoteEntry> g_remoteBySlot;
+		std::optional<Send> g_offer;  // our palette, to the opponent
 		uint32_t g_nextSeq = 1;
-		int g_newPalettes = 0;
 		uint8_t g_version = proto::VERSION;  // agreed with the opponent
+
+		// What we received, per side, by the sender's number, so a late or reordered datagram never
+		// replaces a newer palette: the latest per character (what that side shows right now, for
+		// previews) and per character and slot (what it loads with that slot).
+		std::map<int, Received> g_latest[2];
+		std::map<std::pair<int, int>, Received> g_bySlot[2];
+		uint32_t g_latestSeq[2] = {0, 0};
+		// Palettes we received lately (this character select or match), so one offered again
+		// (e.g. for another slot) is only acknowledged, not sent again.
+		std::map<std::array<uint8_t, 16>, Palette> g_known;
+		std::map<std::pair<int, std::array<uint8_t, 16>>, Pending> g_pending;  // by side and hash
+		int g_newPalettes = 0;
 
 		// Host: who asked the game to play us lately (the game's own INIT_REQUEST packets). A player
 		// HELLO must come from one of them, so nobody else can take over the exchange; spectators
@@ -104,11 +130,11 @@ namespace ps::net {
 			ULONGLONG at;
 		};
 		std::vector<PlayRequest> g_playRequests;
+
 		// Spectators. Any node a spectator's game watches through (the host, or a spectator
 		// relaying to others) serves it what each side is shown with: a player node its own palette
 		// for its side and the raw palette the opponent sent for theirs, a spectator what it got from
-		// upstream. Only addresses that asked the game to spectate are served (no traffic for forged
-		// HELLOs), and each palette is resent until acknowledged.
+		// upstream. Only addresses that asked the game to spectate are answered.
 		struct Shown {
 			uint32_t seq = 0;  // ours: numbers what we serve; a spectator acknowledges it
 			int charId = -1;
@@ -118,14 +144,6 @@ namespace ps::net {
 		};
 		Shown g_shown[2];
 		uint32_t g_shownSeq = 0;
-		struct Push {
-			uint32_t seq = 0;
-			PaletteHash hash;
-			std::vector<std::vector<uint8_t>> packets;
-			bool acked = true;
-			int sends = 0;
-			ULONGLONG nextSend = 0;
-		};
 		// A spectator gets palettes only once it echoed the cookie of our HELLO reply (JOIN): then we
 		// know our packets reach it at that address. Until then it costs one small reply per HELLO.
 		struct Spectator {
@@ -134,7 +152,7 @@ namespace ps::net {
 			uint32_t cookie = 0;
 			ULONGLONG lastReply = 0;
 			bool joined = false;
-			Push sides[2];
+			Send sides[2];
 		};
 		std::vector<Spectator> g_spectators;
 		std::vector<PlayRequest> g_spectateRequests;  // the game's join requests to spectate
@@ -146,18 +164,16 @@ namespace ps::net {
 			PaletteHash ownHash;
 		};
 		Loaded g_loaded[2];
-		// Spectating: the node our game watches through, and what it sent for each side.
+		// Spectating: the node our game watches through.
 		bool g_watching = false;
 		bool g_upstreamKnown = false;
 		sockaddr_in g_upstream{};
 		int g_upstreamTries = 0;
 		ULONGLONG g_nextUpstreamHello = 0;
-		RemoteEntry g_watched[2];
-		int g_watchedChar[2] = {-1, -1};
 		uint32_t g_joinCookie = 0;  // from upstream's HELLO reply
 		int g_joinSends = 0;
 		ULONGLONG g_nextJoin = 0;
-		bool g_gotSide = false;
+		bool g_gotPalette = false;
 
 		std::atomic<unsigned> g_generation = 0;
 		std::atomic<bool> g_stop = false;
@@ -166,6 +182,11 @@ namespace ps::net {
 		bool sameAddr(const sockaddr_in &a, const sockaddr_in &b)
 		{
 			return a.sin_addr.s_addr == b.sin_addr.s_addr && a.sin_port == b.sin_port;
+		}
+
+		std::string addressText(const sockaddr_in &a)
+		{
+			return std::string(inet_ntoa(a.sin_addr)) + ":" + std::to_string(ntohs(a.sin_port));
 		}
 
 		bool inNetplayScene()
@@ -193,8 +214,8 @@ namespace ps::net {
 			return obj ? obj->netUdp.socket : INVALID_SOCKET;
 		}
 
-		// The client knows the host's address from the connection; the host learns the client's
-		// from its HELLO.
+		// The game's peer: for a client the host, for a spectator the node it watches through (the
+		// host learns its client's address from its HELLO).
 		std::optional<sockaddr_in> hostAddress()
 		{
 			auto obj = *reinterpret_cast<SokuLib::NetObject **>(SokuLib::ADDR_PNETOBJECT);
@@ -203,15 +224,13 @@ namespace ps::net {
 			return obj->netUdp.opponent;
 		}
 
-		// Packets and disk writes queued under g_mutex and done after it's released: other mods hook
-		// sendto too (and may lock around it), and a slow disk mustn't stall the game's receive
-		// thread mid-match.
+		// Packets queued under g_mutex and sent after it's released: other mods hook sendto too (and
+		// may lock around it).
 		struct Outgoing {
 			std::vector<uint8_t> packet;
 			sockaddr_in to;
 		};
 		std::vector<Outgoing> g_outbox;
-		std::vector<std::pair<Palette, PaletteHash>> g_toStore;
 		int g_ignoredLogs = 0;
 		int g_lastScene = -1;
 
@@ -219,6 +238,17 @@ namespace ps::net {
 		void sendTo(const std::vector<uint8_t> &packet, const sockaddr_in &to)
 		{
 			g_outbox.push_back({packet, to});
+		}
+
+		// Caller holds g_mutex.
+		void pump(Send &send, const sockaddr_in &to, int maxSends, ULONGLONG now)
+		{
+			if (send.acked || send.sends >= maxSends || now < send.nextSend)
+				return;
+			for (auto &packet : send.packets)
+				sendTo(packet, to);
+			send.sends++;
+			send.nextSend = now + RESEND_INTERVAL_MS;
 		}
 
 		// Caller doesn't hold g_mutex.
@@ -238,16 +268,11 @@ namespace ps::net {
 				     reinterpret_cast<const sockaddr *>(&out.to), sizeof(out.to));
 		}
 
-		// Our thread, without g_mutex.
-		void storeReceived()
+		// A new character select (or, spectating, a new match): the new-palette count starts over.
+		void newRound()
 		{
-			std::vector<std::pair<Palette, PaletteHash>> toStore;
-			{
-				std::lock_guard lock(g_mutex);
-				toStore.swap(g_toStore);
-			}
-			for (auto &[palette, hash] : toStore)
-				cache.store(palette, hash);
+			g_newPalettes = 0;
+			g_known.clear();
 		}
 
 		void resetSession()
@@ -259,10 +284,13 @@ namespace ps::net {
 			g_nextHello = 0;
 			g_offer.reset();
 			g_pending.clear();
-			for (auto &shown : g_shown)
-				shown = Shown{};
-			for (auto &loaded : g_loaded)
-				loaded = Loaded{};
+			for (int side = 0; side < 2; side++) {
+				g_latest[side].clear();
+				g_bySlot[side].clear();
+				g_latestSeq[side] = 0;
+				g_shown[side] = Shown{};
+				g_loaded[side] = Loaded{};
+			}
 			g_spectators.clear();
 			g_upstreamKnown = false;
 			g_upstream = {};
@@ -271,21 +299,10 @@ namespace ps::net {
 			g_joinCookie = 0;
 			g_joinSends = 0;
 			g_nextJoin = 0;
-			g_gotSide = false;
-			for (int side = 0; side < 2; side++) {
-				g_watched[side] = RemoteEntry{};
-				g_watchedChar[side] = -1;
-			}
-			g_remote.clear();
-			g_remoteBySlot.clear();
-			g_newPalettes = 0;
+			g_gotPalette = false;
+			newRound();
 			g_ignoredLogs = 0;
 			g_version = proto::VERSION;
-		}
-
-		std::string addressText(const sockaddr_in &a)
-		{
-			return std::string(inet_ntoa(a.sin_addr)) + ":" + std::to_string(ntohs(a.sin_port));
 		}
 
 		Spectator *spectatorAt(const sockaddr_in &from)
@@ -299,12 +316,9 @@ namespace ps::net {
 		void queuePush(Spectator &spectator, int side)
 		{
 			auto &shown = g_shown[side];
-			auto &push = spectator.sides[side];
-			if (shown.charId < 0 || push.seq == shown.seq)
+			if (shown.charId < 0 || spectator.sides[side].seq == shown.seq)
 				return;
-			push = Push{shown.seq, shown.hash,
-				proto::makeSide(static_cast<uint8_t>(side), shown.seq, static_cast<uint16_t>(shown.charId), static_cast<uint8_t>(shown.slot), shown.hash, shown.bytes),
-				false, 0, 0};
+			spectator.sides[side] = makeSend(side, shown.seq, shown.charId, shown.slot, shown.hash, shown.bytes);
 		}
 
 		// What a side is shown with changed: spectators get it.
@@ -334,11 +348,9 @@ namespace ps::net {
 					setShown(side, loaded.charId, loaded.slot, loaded.ownHash, loaded.own->serialize());
 				return;
 			}
-			auto it = g_remoteBySlot.find({loaded.charId, loaded.slot});
-			if (it == g_remoteBySlot.end())
-				return;
-			if (auto palette = cache.load(it->second.hash))
-				setShown(side, loaded.charId, loaded.slot, it->second.hash, palette->serialize());
+			auto it = g_bySlot[side].find({loaded.charId, loaded.slot});
+			if (it != g_bySlot[side].end())
+				setShown(side, loaded.charId, loaded.slot, it->second.hash, it->second.palette.serialize());
 		}
 
 		bool askedToSpectate(const sockaddr_in &from)
@@ -385,7 +397,7 @@ namespace ps::net {
 				}
 				g_spectators.push_back(Spectator{from, now});
 				spectator = &g_spectators.back();
-				log("net: spectator %s has PaletteShare %s", addressText(from).c_str(), hello.modVersion.empty() ? "(old)" : hello.modVersion.c_str());
+				log("net: spectator %s has PaletteShare %s", addressText(from).c_str(), hello.modVersion.c_str());
 			}
 			if (now - spectator->lastReply < SPECTATOR_HELLO_GAP_MS)
 				return;
@@ -395,8 +407,8 @@ namespace ps::net {
 			if (spectator->joined || !spectator->cookie) {
 				spectator->cookie = newCookie();
 				spectator->joined = false;
-				for (auto &push : spectator->sides)
-					push = Push{};
+				for (auto &send : spectator->sides)
+					send = Send{};
 			}
 			sendTo(proto::makeHello(g_watching ? proto::ROLE_SPECTATOR : proto::ROLE_PLAYER, true, spectator->cookie), from);
 		}
@@ -410,19 +422,6 @@ namespace ps::net {
 			log("net: spectator %s joined", addressText(from).c_str());
 			for (int side = 0; side < 2; side++)
 				queuePush(*spectator, side);
-		}
-
-		// Spectating: a side's palette from upstream, complete and verified (in the cache).
-		void watched(int side, uint32_t seq, int charId, int slot, const PaletteHash &hash, const Palette &palette, bool fresh)
-		{
-			auto &entry = g_watched[side];
-			if (seq <= entry.seq)
-				return;
-			entry = {seq, slot, hash};
-			g_watchedChar[side] = charId;
-			g_generation++;
-			log("net: side %d palette #%u char=%d slot=%d %s%s", side, seq, charId, slot, hash.hex().c_str(), fresh ? "" : " (already cached)");
-			setShown(side, charId, slot, hash, palette.serialize());  // for spectators watching through us
 		}
 
 		// Whether a player HELLO comes from the game's own opponent.
@@ -457,13 +456,12 @@ namespace ps::net {
 				if (!hello.isReply || !hello.cookie || !upstream || !sameAddr(from, *upstream))
 					return;
 				if (!g_upstreamKnown)
-					log("net: watching through %s, which has PaletteShare %s", addressText(from).c_str(),
-						hello.modVersion.empty() ? "(old)" : hello.modVersion.c_str());
+					log("net: watching through %s, which has PaletteShare %s", addressText(from).c_str(), hello.modVersion.c_str());
 				g_upstreamKnown = true;
 				g_upstream = from;
 				if (hello.cookie != g_joinCookie) {  // the latest one counts
 					g_joinCookie = hello.cookie;
-					g_gotSide = false;
+					g_gotPalette = false;
 					g_joinSends = 0;
 					g_nextJoin = 0;
 				}
@@ -477,13 +475,11 @@ namespace ps::net {
 				if (g_ignoredLogs++ < MAX_IGNORED_LOGS) {
 					std::string expected;
 					if (auto host = localSide() == 1 ? hostAddress() : std::nullopt)
-						expected = std::string(inet_ntoa(host->sin_addr)) + ":" + std::to_string(ntohs(host->sin_port));
+						expected = addressText(*host);
 					else
 						for (auto &request : g_playRequests)
-							expected += std::string(expected.empty() ? "" : ", ") + inet_ntoa(request.from.sin_addr) + ":" +
-							            std::to_string(ntohs(request.from.sin_port));
-					std::string sender = std::string(inet_ntoa(from.sin_addr)) + ":" + std::to_string(ntohs(from.sin_port));
-					log("net: ignored a HELLO from %s, not our opponent (expected %s)", sender.c_str(), expected.empty() ? "?" : expected.c_str());
+							expected += (expected.empty() ? "" : ", ") + addressText(request.from);
+					log("net: ignored a HELLO from %s, not our opponent (expected %s)", addressText(from).c_str(), expected.empty() ? "?" : expected.c_str());
 				}
 				return;
 			}
@@ -492,16 +488,14 @@ namespace ps::net {
 			if (common < (std::max)(proto::MIN_VERSION, hello.minVersion)) {
 				if (!g_peerIncompatible)
 					log("net: opponent's PaletteShare %s speaks protocol v%d-v%d, we speak v%d-v%d; not exchanging palettes",
-						hello.modVersion.empty() ? "(old)" : hello.modVersion.c_str(), hello.minVersion, hello.maxVersion,
-						proto::MIN_VERSION, proto::VERSION);
+						hello.modVersion.c_str(), hello.minVersion, hello.maxVersion, proto::MIN_VERSION, proto::VERSION);
 				g_peerIncompatible = true;
 				return;
 			}
 			g_peerIncompatible = false;
 			g_version = common;
 			if (!g_peerKnown)
-				log("net: opponent has PaletteShare %s (%s), protocol v%d", hello.modVersion.empty() ? "(old)" : hello.modVersion.c_str(),
-					hello.isReply ? "reply" : "hello", g_version);
+				log("net: opponent has PaletteShare %s (%s), protocol v%d", hello.modVersion.c_str(), hello.isReply ? "reply" : "hello", g_version);
 			g_peerKnown = true;
 			g_peer = from;
 			if (!hello.isReply)
@@ -510,40 +504,58 @@ namespace ps::net {
 				g_offer->nextSend = 0;  // send our palette right away
 		}
 
-		// Records an offer whose palette is in the cache; offers older than what we have are ignored.
-		void remember(uint32_t seq, int charId, int slot, const PaletteHash &hash, bool fresh)
+		// A side's palette, complete and checked. Older ones than what we have are ignored.
+		void remember(int side, uint32_t seq, int charId, int slot, const PaletteHash &hash, const Palette &palette, bool fresh)
 		{
-			auto &bySlot = g_remoteBySlot[{charId, slot}];
+			auto &bySlot = g_bySlot[side][{charId, slot}];
 			if (seq > bySlot.seq) {
-				bySlot = {seq, slot, hash};
-				int remote = 1 - localSide();
-				if (remote >= 0 && remote <= 1 && g_loaded[remote].charId == charId && g_loaded[remote].slot == slot)
-					refreshShown(remote);  // arrived after their character loaded
+				bySlot = {seq, slot, hash, palette};
+				if (g_inSession && g_loaded[side].charId == charId && g_loaded[side].slot == slot)
+					refreshShown(side);  // the opponent's, arriving after their character loaded
 			}
-			auto &latest = g_remote[charId];
+			if (g_watching && seq > g_latestSeq[side]) {
+				g_latestSeq[side] = seq;
+				setShown(side, charId, slot, hash, palette.serialize());  // for spectators watching through us
+			}
+			auto &latest = g_latest[side][charId];
 			if (seq <= latest.seq) {
 				if (seq < latest.seq)
-					log("net: older offer #%u char=%d slot=%d arrived after #%u, not shown", seq, charId, slot, latest.seq);
+					log("net: older palette #%u for side %d char=%d slot=%d arrived after #%u, not shown", seq, side, charId, slot, latest.seq);
 				return;
 			}
 			bool changed = latest.slot != slot || !(latest.hash == hash);
-			latest = {seq, slot, hash};
+			latest = {seq, slot, hash, palette};
 			if (changed || fresh) {
 				g_generation++;
-				log("net: opponent palette #%u char=%d slot=%d %s%s", seq, charId, slot, hash.hex().c_str(), fresh ? "" : " (already cached)");
+				log("net: side %d palette #%u char=%d slot=%d %s%s", side, seq, charId, slot, hash.hex().c_str(), fresh ? "" : " (known)");
 			}
+		}
+
+		// Who may send us a side's palette: the opponent its own side's, the node we watch through
+		// either side's.
+		bool mayReceive(const sockaddr_in &from, int side)
+		{
+			if (g_inSession)
+				return g_peerKnown && sameAddr(from, g_peer) && side == 1 - localSide();
+			auto upstream = hostAddress();
+			return g_watching && upstream && sameAddr(from, *upstream);
 		}
 
 		void onPalette(const proto::PaletteChunk &chunk, const sockaddr_in &from)
 		{
-			if (!g_peerKnown || !sameAddr(from, g_peer))
+			if (!mayReceive(from, chunk.side))
 				return;
+			if (g_watching)
+				g_gotPalette = true;  // it got our JOIN
 
-			auto it = g_pending.find(chunk.hash.bytes);
+			int side = chunk.side;
+			auto key = std::make_pair(side, chunk.hash.bytes);
+			auto it = g_pending.find(key);
 			if (it == g_pending.end()) {
 				// Already have it: just acknowledge, so the sender stops resending.
-				if (cache.load(chunk.hash)) {
-					remember(chunk.seq, chunk.charId, chunk.slot, chunk.hash, false);
+				auto known = g_known.find(chunk.hash.bytes);
+				if (known != g_known.end()) {
+					remember(side, chunk.seq, chunk.charId, chunk.slot, chunk.hash, known->second, false);
 					sendTo(proto::makeAck(chunk.hash, chunk.seq), from);
 					return;
 				}
@@ -554,8 +566,8 @@ namespace ps::net {
 							oldest = p;
 					g_pending.erase(oldest);
 				}
-				Pending p{-1, chunk.seq, chunk.charId, chunk.slot, std::vector<uint8_t>(chunk.totalSize), std::vector<bool>(chunk.totalSize), chunk.totalSize, GetTickCount64()};
-				it = g_pending.emplace(chunk.hash.bytes, std::move(p)).first;
+				Pending p{chunk.seq, chunk.charId, chunk.slot, std::vector<uint8_t>(chunk.totalSize), std::vector<bool>(chunk.totalSize), chunk.totalSize, GetTickCount64()};
+				it = g_pending.emplace(key, std::move(p)).first;
 			}
 
 			auto &p = it->second;
@@ -582,106 +594,33 @@ namespace ps::net {
 			int charId = p.charId, slot = p.slot;
 			g_pending.erase(it);
 			if (!palette || !(hashPalette(*palette) == chunk.hash)) {
-				log("net: dropped a palette from the opponent that doesn't match its hash");
+				log("net: dropped a side %d palette that doesn't match its hash", side);
 				return;
 			}
 			// A slot's original palette can't be abusive, and browsing offers plenty of them.
 			auto original = game::normalCharacter(charId) ? original::palette(game::characterName(charId), slot) : std::nullopt;
 			if (!(original && sameColors(*original, *palette)) && ++g_newPalettes > MAX_NEW_PALETTES) {
 				if (g_newPalettes == MAX_NEW_PALETTES + 1)
-					log("net: the opponent sent more than %d new palettes in this character select, ignoring the rest", MAX_NEW_PALETTES);
+					log("net: more than %d new palettes from %s, ignoring the rest for now", MAX_NEW_PALETTES, addressText(from).c_str());
 				return;
 			}
-			cache.keep(*palette, chunk.hash);
-			g_toStore.emplace_back(*palette, chunk.hash);
-			remember(seq, charId, slot, chunk.hash, true);
-			sendTo(proto::makeAck(chunk.hash, seq), from);
-		}
-
-		// Spectating: a chunk of a side's palette from the node we watch through.
-		void onSide(const proto::SideChunk &sideChunk, const sockaddr_in &from)
-		{
-			auto upstream = hostAddress();
-			if (!g_watching || !upstream || !sameAddr(from, *upstream))
-				return;
-			g_gotSide = true;  // it got our JOIN
-			auto &chunk = sideChunk.chunk;
-			int side = sideChunk.side;
-			// Keyed by hash and side: both sides may share a palette.
-			auto key = chunk.hash.bytes;
-			key[0] ^= static_cast<uint8_t>(0x80 * side);
-			auto it = g_pending.find(key);
-			if (it == g_pending.end()) {
-				if (auto palette = cache.load(chunk.hash)) {
-					watched(side, chunk.seq, chunk.charId, chunk.slot, chunk.hash, *palette, false);
-					sendTo(proto::makeAck(chunk.hash, chunk.seq), from);
-					return;
-				}
-				if (g_pending.size() >= MAX_PENDING) {
-					auto oldest = g_pending.begin();
-					for (auto p = g_pending.begin(); p != g_pending.end(); ++p)
-						if (p->second.started < oldest->second.started)
-							oldest = p;
-					g_pending.erase(oldest);
-				}
-				Pending p{side, chunk.seq, chunk.charId, chunk.slot, std::vector<uint8_t>(chunk.totalSize), std::vector<bool>(chunk.totalSize), chunk.totalSize, GetTickCount64()};
-				it = g_pending.emplace(key, std::move(p)).first;
-			}
-			auto &p = it->second;
-			if (p.data.size() != chunk.totalSize)
-				return;
-			if (chunk.seq > p.seq) {
-				p.seq = chunk.seq;
-				p.charId = chunk.charId;
-				p.slot = chunk.slot;
-			}
-			for (size_t i = 0; i < chunk.data.size(); i++) {
-				size_t at = chunk.offset + i;
-				if (!p.have[at]) {
-					p.have[at] = true;
-					p.missing--;
-				}
-				p.data[at] = chunk.data[i];
-			}
-			if (p.missing)
-				return;
-			auto palette = Palette::deserialize(p.data.data(), p.data.size());
-			uint32_t seq = p.seq;
-			int charId = p.charId, slot = p.slot;
-			g_pending.erase(it);
-			if (!palette || !(hashPalette(*palette) == chunk.hash)) {
-				log("net: dropped a side %d palette that doesn't match its hash", side);
-				return;
-			}
-			auto original = game::normalCharacter(charId) ? original::palette(game::characterName(charId), slot) : std::nullopt;
-			if (!(original && sameColors(*original, *palette)) && ++g_newPalettes > MAX_NEW_PALETTES)
-				return;
-			cache.keep(*palette, chunk.hash);
-			g_toStore.emplace_back(*palette, chunk.hash);
-			watched(side, seq, charId, slot, chunk.hash, *palette, true);
+			g_known[chunk.hash.bytes] = *palette;
+			remember(side, seq, charId, slot, chunk.hash, *palette, true);
 			sendTo(proto::makeAck(chunk.hash, seq), from);
 		}
 
 		void onAck(const proto::Ack &ack, const sockaddr_in &from)
 		{
 			if (auto spectator = spectatorAt(from)) {
-				for (int side = 0; side < 2; side++) {
-					auto &push = spectator->sides[side];
-					if (push.seq == ack.seq && push.hash == ack.hash && !push.acked) {
-						push.acked = true;
+				for (int side = 0; side < 2; side++)
+					if (acknowledge(spectator->sides[side], ack))
 						log("net: spectator %s has side %d's palette", addressText(from).c_str(), side);
-					}
-				}
 				return;
 			}
-			if (!g_peerKnown || !sameAddr(from, g_peer))
-				return;
 			// Only the offer it answers: one for an earlier offer with the same palette (the wheel
 			// stepping towards its slot) mustn't stop the current one from being sent.
-			if (g_offer && g_offer->seq == ack.seq && g_offer->hash == ack.hash && !g_offer->acked) {
-				g_offer->acked = true;
+			if (g_peerKnown && sameAddr(from, g_peer) && g_offer && acknowledge(*g_offer, ack))
 				log("net: opponent has our offer #%u", ack.seq);
-			}
 		}
 
 		void handle(const uint8_t *data, size_t size, const sockaddr_in &from)
@@ -700,45 +639,35 @@ namespace ps::net {
 				return;  // the opponent talks the version we agreed on
 			if (auto chunk = proto::parsePalette(data, size))
 				onPalette(*chunk, from);
-			else if (auto side = proto::parseSide(data, size))
-				onSide(*side, from);
 			else if (auto cookie = proto::parseJoin(data, size))
 				onJoin(*cookie, from);
 			else if (auto ack = proto::parseAck(data, size))
 				onAck(*ack, from);
 		}
 
-		// The game's join requests to play us. Only those before a match count: during one the game
-		// turns new requests away, so a stranger can't become "the opponent" by sending one.
-		void notePlayRequest(const sockaddr_in &from)
+		void noteRequest(std::vector<PlayRequest> &requests, size_t max, const sockaddr_in &from)
 		{
-			std::lock_guard lock(g_mutex);
-			if (g_inSession)
-				return;
 			auto now = GetTickCount64();
-			for (auto &request : g_playRequests)
+			for (auto &request : requests)
 				if (sameAddr(request.from, from)) {
 					request.at = now;
 					return;
 				}
-			if (g_playRequests.size() >= 8)
-				g_playRequests.erase(g_playRequests.begin());
-			g_playRequests.push_back({from, now});
+			if (requests.size() >= max)
+				requests.erase(requests.begin());
+			requests.push_back({from, now});
 		}
 
-		// The game's join requests to spectate us (at any time; we may also be a spectator relaying).
-		void noteSpectateRequest(const sockaddr_in &from)
+		// The game's join requests: to play us (only those before a match count: during one the game
+		// turns new requests away, so a stranger can't become "the opponent" by sending one), or to
+		// spectate (at any time; we may also be a spectator relaying the match).
+		void noteJoinRequest(uint8_t type, const sockaddr_in &from)
 		{
 			std::lock_guard lock(g_mutex);
-			auto now = GetTickCount64();
-			for (auto &request : g_spectateRequests)
-				if (sameAddr(request.from, from)) {
-					request.at = now;
-					return;
-				}
-			if (g_spectateRequests.size() >= 32)
-				g_spectateRequests.erase(g_spectateRequests.begin());
-			g_spectateRequests.push_back({from, now});
+			if (type == PLAY_REQUEST && !g_inSession)
+				noteRequest(g_playRequests, 8, from);
+			else if (type == SPECTATE_REQUEST)
+				noteRequest(g_spectateRequests, 32, from);
 		}
 
 		int __stdcall onRecvFrom(SOCKET s, char *buf, int len, int flags, sockaddr *from, int *fromlen)
@@ -749,13 +678,8 @@ namespace ps::net {
 					return r;
 				bool fromV4 = from && fromlen && *fromlen >= static_cast<int>(sizeof(sockaddr_in)) && from->sa_family == AF_INET;
 				if (!proto::isOurs(reinterpret_cast<uint8_t *>(buf), r)) {
-					if (fromV4 && r > static_cast<int>(INIT_REQUEST_TYPE_AT) && static_cast<uint8_t>(buf[0]) == GAME_INIT_REQUEST) {
-						uint8_t type = static_cast<uint8_t>(buf[INIT_REQUEST_TYPE_AT]);
-						if (type == PLAY_REQUEST)
-							notePlayRequest(*reinterpret_cast<sockaddr_in *>(from));
-						else if (type == SPECTATE_REQUEST)
-							guarded("network", [&] { noteSpectateRequest(*reinterpret_cast<sockaddr_in *>(from)); });
-					}
+					if (fromV4 && r > static_cast<int>(INIT_REQUEST_TYPE_AT) && static_cast<uint8_t>(buf[0]) == GAME_INIT_REQUEST)
+						guarded("network", [&] { noteJoinRequest(static_cast<uint8_t>(buf[INIT_REQUEST_TYPE_AT]), *reinterpret_cast<sockaddr_in *>(from)); });
 					return r;
 				}
 				if (fromV4) {
@@ -764,19 +688,6 @@ namespace ps::net {
 				}
 				// Ours: hide it from the game and wait for the next datagram.
 			}
-		}
-
-		void sendToSpectators(ULONGLONG now)
-		{
-			for (auto &spectator : g_spectators)
-				for (auto &push : spectator.sides) {
-					if (!spectator.joined || push.acked || push.sends >= SIDE_MAX_SENDS || now < push.nextSend)
-						continue;
-					for (auto &packet : push.packets)
-						sendTo(packet, spectator.addr);
-					push.sends++;
-					push.nextSend = now + OFFER_INTERVAL_MS;
-				}
 		}
 
 		void tick()
@@ -805,13 +716,13 @@ namespace ps::net {
 				log("net: %s netplay session", session ? "entered" : "left");
 			}
 			int scene = SokuLib::sceneId;
-			bool newSelect = g_inSession && scene != g_lastScene && (scene == SokuLib::SCENE_SELECTSV || scene == SokuLib::SCENE_SELECTCL);
+			bool sceneChanged = scene != g_lastScene;
 			g_lastScene = scene;
-			if (newSelect) {
+			if (sceneChanged && g_inSession && (scene == SokuLib::SCENE_SELECTSV || scene == SokuLib::SCENE_SELECTCL)) {
 				// Each character select starts fresh: a lost handshake gets another chance (per
 				// rematch), and the new-palette count starts over. The loaded characters are history:
 				// what the opponent browses now mustn't reach spectators still watching the last match.
-				g_newPalettes = 0;
+				newRound();
 				for (auto &loaded : g_loaded)
 					loaded = Loaded{};
 				if (!g_peerKnown && (g_helloTries > 0 || g_peerIncompatible)) {
@@ -820,8 +731,14 @@ namespace ps::net {
 					log("net: new character select, trying the handshake again");
 				}
 			}
+			if (sceneChanged && g_watching && scene == SokuLib::SCENE_LOADINGWATCH)
+				newRound();  // spectating: a new match
+
 			auto now = GetTickCount64();
-			sendToSpectators(now);
+			for (auto &spectator : g_spectators)
+				if (spectator.joined)
+					for (auto &send : spectator.sides)
+						pump(send, spectator.addr, SIDE_MAX_SENDS, now);
 			if (g_watching) {
 				// Ask the node our game watches through (the host, or a spectator relaying it).
 				if (!g_upstreamKnown && g_upstreamTries < HELLO_MAX_TRIES && now >= g_nextUpstreamHello) {
@@ -832,11 +749,11 @@ namespace ps::net {
 						g_upstreamTries++;
 						g_nextUpstreamHello = now + HELLO_INTERVAL_MS;
 						if (g_upstreamTries == HELLO_MAX_TRIES)
-							log("net: no answer; the game we watch has no PaletteShare (or an older one)");
+							log("net: no answer; the game we watch has no PaletteShare (or an incompatible one)");
 					}
 				}
 				// JOIN until a palette arrives (it may have none yet: then our JOIN is all it needs).
-				if (g_upstreamKnown && !g_gotSide && g_joinSends < JOIN_MAX_SENDS && now >= g_nextJoin) {
+				if (g_upstreamKnown && !g_gotPalette && g_joinSends < JOIN_MAX_SENDS && now >= g_nextJoin) {
 					sendTo(proto::makeJoin(g_joinCookie), g_upstream);
 					g_joinSends++;
 					g_nextJoin = now + HELLO_INTERVAL_MS;
@@ -859,13 +776,16 @@ namespace ps::net {
 				}
 				return;
 			}
+			if (g_offer)
+				pump(*g_offer, g_peer, OFFER_MAX_SENDS, now);
+		}
 
-			if (g_offer && !g_offer->acked && g_offer->sends < OFFER_MAX_SENDS && now >= g_offer->nextSend) {
-				for (auto &packet : g_offer->packets)
-					sendTo(packet, g_peer);
-				g_offer->sends++;
-				g_offer->nextSend = now + OFFER_INTERVAL_MS;
-			}
+		std::optional<Palette> find(const std::map<std::pair<int, int>, Received> &map, int charId, int slot)
+		{
+			auto it = map.find({charId, slot});
+			if (it == map.end())
+				return std::nullopt;
+			return it->second.palette;
 		}
 	}
 
@@ -881,7 +801,8 @@ namespace ps::net {
 	void offerLocal(int charId, int slot, const Palette &palette, const PaletteHash &hash, bool again)
 	{
 		std::lock_guard lock(g_mutex);
-		if (localSide() < 0)
+		int side = localSide();
+		if (side < 0)
 			return;
 		if (g_offer && g_offer->charId == charId && g_offer->slot == slot && g_offer->hash == hash) {
 			if (again && g_offer->acked) {  // the character loads with it: make sure the opponent has it
@@ -891,29 +812,28 @@ namespace ps::net {
 			}
 			return;
 		}
-
 		uint32_t seq = g_nextSeq++;
-		Offer offer{seq, charId, slot, hash, proto::makePalette(seq, static_cast<uint16_t>(charId), static_cast<uint8_t>(slot), hash, palette.serialize())};
-		g_offer = std::move(offer);
+		g_offer = makeSend(side, seq, charId, slot, hash, palette.serialize());
 		log("net: offering #%u char=%d slot=%d %s", seq, charId, slot, hash.hex().c_str());
 	}
 
-	std::optional<PaletteHash> remotePalette(int charId, int slot)
+	std::optional<Palette> received(int side, int charId, int slot)
 	{
 		std::lock_guard lock(g_mutex);
-		auto it = g_remoteBySlot.find({charId, slot});
-		if (it == g_remoteBySlot.end())
+		if (side < 0 || side > 1 || (!g_inSession && !g_watching))
 			return std::nullopt;
-		return it->second.hash;
+		return find(g_bySlot[side], charId, slot);
 	}
 
-	std::optional<PaletteHash> remoteShown(int charId)
+	std::optional<Palette> receivedNow(int side, int charId)
 	{
 		std::lock_guard lock(g_mutex);
-		auto it = g_remote.find(charId);
-		if (it == g_remote.end())
+		if (side < 0 || side > 1 || (!g_inSession && !g_watching))
 			return std::nullopt;
-		return it->second.hash;
+		auto it = g_latest[side].find(charId);
+		if (it == g_latest[side].end())
+			return std::nullopt;
+		return it->second.palette;
 	}
 
 	PeerStatus peerStatus()
@@ -942,14 +862,6 @@ namespace ps::net {
 		refreshShown(side);
 	}
 
-	std::optional<PaletteHash> watchedPalette(int side, int charId, int slot)
-	{
-		std::lock_guard lock(g_mutex);
-		if (!g_watching || side < 0 || side > 1 || g_watchedChar[side] != charId || g_watched[side].slot != slot)
-			return std::nullopt;
-		return g_watched[side].hash;
-	}
-
 	unsigned remoteGeneration()
 	{
 		return g_generation;
@@ -976,7 +888,6 @@ namespace ps::net {
 			while (!g_stop) {
 				guarded("network tick", tick);
 				guarded("network send", flushOutbox);
-				guarded("cache", storeReceived);
 				Sleep(50);
 			}
 		});

@@ -288,8 +288,8 @@ namespace ps::picker {
 				} else if (theirPick.confirmed && theirPick.confirmedChar == pick.charId) {
 					pick.takenPalette = theirPick.confirmedCustom;
 				}
-			} else if (auto hash = net::remotePalette(pick.charId, pick.takenSlot)) {
-				pick.takenPalette = cache.load(*hash);
+			} else {
+				pick.takenPalette = net::received(other, pick.charId, pick.takenSlot);
 			}
 		}
 

@@ -45,7 +45,6 @@
 
 namespace ps {
 	Config config;
-	PaletteCache cache;
 
 	namespace {
 		struct Side {
@@ -108,21 +107,13 @@ namespace ps {
 		// select previews, anySlot) the one they show now.
 		std::optional<Palette> customFor(int side, int charId, int slot, const Palette &reference, bool anySlot = false)
 		{
-			std::optional<PaletteHash> hash;
 			std::optional<Palette> palette;
 			if (watchingReplay())
 				palette = replay::paletteFor(side, charId, slot);
-			else if (spectating())
-				hash = net::watchedPalette(side, charId, slot);
-			else if (config.forcePalette[side])
-				hash = config.forcePalette[side];
-			else if (side == remoteSide())
-				hash = anySlot ? net::remoteShown(charId) : net::remotePalette(charId, slot);
-			if (hash) {
-				palette = cache.load(*hash);
-				if (!palette)
-					log("  side=%d: palette %s missing from the cache", side, hash->hex().c_str());
-			}
+			else if (config.forcePalette[side] && !spectating())
+				palette = config.forcePalette[side];
+			else if (spectating() || side == remoteSide())
+				palette = anySlot ? net::receivedNow(side, charId) : net::received(side, charId, slot);
 			if (!palette)
 				return std::nullopt;
 			auto checked = fitToViewer(charId, lockTransparency(*palette, reference), reference);
@@ -131,37 +122,10 @@ namespace ps {
 			return checked;
 		}
 
-		// Re-create the side's textures with `palette` and swap them in behind the same handles.
-		void rebuildTextures(Side &side, const Palette &palette)
-		{
-			auto &current = SokuLib::Palette::currentPalette;
-			auto saved = readGamePalette(current);
-			writeGamePalette(palette, current);
-
-			auto start = GetTickCount64();
-			int swapped = 0;
-			for (auto &[handle, path] : side.textures) {
-				int fresh = 0;
-				SokuLib::textureMgr.loadTexture(&fresh, path.c_str(), nullptr, nullptr);
-				if (!fresh)
-					continue;
-				auto a = SokuLib::textureMgr.Get(handle);
-				auto b = SokuLib::textureMgr.Get(fresh);
-				if (a && b && fresh != handle) {
-					std::swap(*a, *b);
-					swapped++;
-				}
-				SokuLib::textureMgr.remove(fresh);  // releases the texture we swapped out
-			}
-
-			if (saved.valid())
-				writeGamePalette(saved, current);
-			log("  rebuilt %d/%d textures in %llu ms", swapped, (int)side.textures.size(), GetTickCount64() - start);
-		}
-
-		// A late palette's rebuild, spread over a few frames (rebuilding everything at once takes
-		// ~30 ms: a visible hitch at a random moment mid-match). The new textures are made a batch per
-		// frame, then all swapped in at once. Render thread, under g_sidesMutex.
+		// Re-creating a side's textures with another palette and swapping them in behind the same
+		// handles. A late palette's is spread over a few frames (all at once takes ~30 ms: a visible
+		// hitch at a random moment mid-match); the hotkey's happens at once. The new textures are
+		// made first, then all swapped in. Render thread, under g_sidesMutex.
 		struct Rebuild {
 			bool active = false;
 			int side = -1;
@@ -247,8 +211,8 @@ namespace ps {
 			cancelRebuild(index);  // the hotkey wins over a late palette still being prepared
 			if (!side.custom || side.showingCustom == custom)
 				return;
-			rebuildTextures(side, custom ? *side.custom : side.vanilla);
-			side.showingCustom = custom;
+			startRebuild(index, custom ? *side.custom : side.vanilla, custom);
+			stepRebuild(g_rebuilds[index], SIZE_MAX);  // at once: the player asked for it
 		}
 
 		// Mirror safety net: the picker keeps both sides of a mirror match apart, but if side 1 would
@@ -328,7 +292,6 @@ namespace ps {
 			}
 
 			auto hash = hashPalette(side.vanilla);
-			cache.store(side.vanilla, hash);
 			log("load side=%d char=%d slot=%d bpp=%d hash=%s", index, side.charId, side.slot, (int)side.vanilla.bpp, hash.hex().c_str());
 
 			if (index == net::localSide())
@@ -337,7 +300,7 @@ namespace ps {
 
 			side.custom = customFor(index, side.charId, side.slot, side.vanilla);
 			if (!side.custom && index == remoteSide())
-				log(net::remotePalette(side.charId, side.slot) ? "  side=%d: the opponent's palette for char=%d slot=%d looks like ours" :
+				log(net::received(index, side.charId, side.slot) ? "  side=%d: the opponent's palette for char=%d slot=%d looks like ours" :
 				                                                   "  side=%d: no palette from the opponent for char=%d slot=%d (yet)",
 					index, side.charId, side.slot);
 			if (side.custom && looksLikeSide0(index, side.charId, *side.custom)) {
@@ -403,9 +366,7 @@ namespace ps {
 				return;
 
 			if (playerId == local) {
-				auto hash = hashPalette(current);
-				cache.store(current, hash);
-				net::offerLocal(charId, slot, current, hash);
+				net::offerLocal(charId, slot, current, hashPalette(current));
 			} else if (g_showOpponent) {
 				if (auto custom = customFor(playerId, charId, slot, current, true))
 					writeGamePalette(*custom, palette);

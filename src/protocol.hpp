@@ -21,8 +21,8 @@
 namespace ps::proto {
 	constexpr uint8_t PACKET_TYPE = 0xA7;
 	constexpr char MAGIC[4] = {'P', 'S', 'H', 'R'};
-	constexpr uint8_t VERSION = 2;      // what we write; 2: palette chunks carry an offer sequence number
-	constexpr uint8_t MIN_VERSION = 2;  // the oldest version we can still talk (HELLO's min..max range)
+	constexpr uint8_t VERSION = 3;      // what we write; 3: palettes carry their side (and go to spectators)
+	constexpr uint8_t MIN_VERSION = 3;  // the oldest version we can still talk (HELLO's min..max range)
 	constexpr size_t HEADER_SIZE = 7;
 	constexpr size_t MAX_CHUNK = 900;
 	constexpr uint16_t MAX_CHARACTER_ID = 256;  // the game's are 0-20; room for modded characters
@@ -32,13 +32,12 @@ namespace ps::proto {
 		                  // version, u8 length + the mod's version string, then (a reply
 		                  // to a spectator) u32 cookie. Both sides talk the highest version in both
 		                  // ranges; HELLO's known fields never change, new ones are appended.
-		KIND_PALETTE = 2, // u32 seq, u16 charId, u8 slot, u8[16] hash, u16 totalSize, u16 offset, u16 len, bytes
-		KIND_ACK = 3,     // u8[16] hash, u32 seq: which offer this confirms (offers in a row often share
+		KIND_PALETTE = 2, // u8 side (0 left, 1 right), u32 seq, u16 charId, u8 slot, u8[16] hash,
+		                  // u16 totalSize, u16 offset, u16 len, bytes: what that side is shown with. To
+		                  // the opponent: our own side's; to a spectator: either side's.
+		KIND_ACK = 3,     // u8[16] hash, u32 seq: which palette this confirms (offers in a row often share
 		                  // a palette while the wheel steps, so the hash alone could confirm the wrong one)
-		KIND_SIDE = 4,    // to a spectator: u8 side (0 left, 1 right), then PALETTE's payload: what that
-		                  // side's player is shown with; acknowledged with ACK. Test builds without it
-		                  // ignore unknown kinds (and spectator HELLOs), so it needs no new version.
-		KIND_JOIN = 5,    // spectator: u32 cookie from the HELLO reply. Proves the spectator gets our
+		KIND_JOIN = 4,    // spectator: u32 cookie from the HELLO reply. Proves the spectator gets our
 		                  // packets at its address before any palette goes there (a forged sender
 		                  // address never sees the cookie).
 	};
@@ -59,7 +58,8 @@ namespace ps::proto {
 	};
 
 	struct PaletteChunk {
-		uint32_t seq;      // the sender's offer number this session: a higher one replaces a lower one
+		uint8_t side;
+		uint32_t seq;      // the sender's number for it this session: a higher one replaces a lower one
 		uint16_t charId;
 		uint8_t slot;
 		PaletteHash hash;
@@ -80,17 +80,10 @@ namespace ps::proto {
 	};
 	std::vector<uint8_t> makeAck(const PaletteHash &hash, uint32_t seq);
 	// Splits the serialized palette into chunk packets.
-	std::vector<std::vector<uint8_t>> makePalette(uint32_t seq, uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized);
-	// The same for a spectator, with the side.
-	std::vector<std::vector<uint8_t>> makeSide(uint8_t side, uint32_t seq, uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized);
-	struct SideChunk {
-		uint8_t side;
-		PaletteChunk chunk;
-	};
+	std::vector<std::vector<uint8_t>> makePalette(uint8_t side, uint32_t seq, uint16_t charId, uint8_t slot, const PaletteHash &hash, const std::vector<uint8_t> &serialized);
 
 	std::optional<Hello> parseHello(const uint8_t *data, size_t size);
 	std::optional<PaletteChunk> parsePalette(const uint8_t *data, size_t size);
-	std::optional<SideChunk> parseSide(const uint8_t *data, size_t size);
 	std::optional<Ack> parseAck(const uint8_t *data, size_t size);
 	std::optional<uint8_t> kindOf(const uint8_t *data, size_t size);
 	std::optional<uint8_t> versionOf(const uint8_t *data, size_t size);

@@ -181,41 +181,31 @@ namespace {
 		for (uint8_t bpp : {16, 32}) {
 			auto p = testPalette(bpp, 5);
 			auto hash = hashPalette(p);
-			auto packets = proto::makePalette(42, 7, 3, hash, p.serialize());
+			auto packets = proto::makePalette(1, 42, 7, 3, hash, p.serialize());
 			CHECK(packets.size() == (bpp == 16 ? 1u : 2u));
 			std::vector<uint8_t> whole(1 + Palette::colorBytes(bpp));
 			for (auto &packet : packets) {
 				CHECK(packet.size() < 1024);  // the game drops datagrams of 1024 bytes and more
 				auto chunk = proto::parsePalette(packet.data(), packet.size());
-				CHECK(chunk && chunk->seq == 42 && chunk->charId == 7 && chunk->slot == 3 && chunk->hash == hash);
+				CHECK(chunk && chunk->side == 1 && chunk->seq == 42 && chunk->charId == 7 && chunk->slot == 3 && chunk->hash == hash);
 				if (chunk)
 					memcpy(whole.data() + chunk->offset, chunk->data.data(), chunk->data.size());
 			}
 			CHECK(whole == p.serialize());
 		}
 		auto p = testPalette(16, 1);
-		CHECK(proto::parsePalette(proto::makePalette(1, 300, 0, hashPalette(p), p.serialize())[0].data(), 30) == std::nullopt);
-		auto badChar = proto::makePalette(1, 300, 0, hashPalette(p), p.serialize())[0];
+		CHECK(proto::parsePalette(proto::makePalette(0, 1, 3, 0, hashPalette(p), p.serialize())[0].data(), 30) == std::nullopt);
+		auto badChar = proto::makePalette(0, 1, 300, 0, hashPalette(p), p.serialize())[0];
 		CHECK(!proto::parsePalette(badChar.data(), badChar.size()));  // charId past 255
-		auto badSlot = proto::makePalette(1, 3, 9, hashPalette(p), p.serialize())[0];
+		auto badSlot = proto::makePalette(0, 1, 3, 9, hashPalette(p), p.serialize())[0];
 		CHECK(!proto::parsePalette(badSlot.data(), badSlot.size()));  // slot past 7
+		auto badSide = proto::makePalette(2, 1, 3, 0, hashPalette(p), p.serialize())[0];
+		CHECK(!proto::parsePalette(badSide.data(), badSide.size()));  // only sides 0 and 1
 		auto ack = proto::makeAck(hashPalette(p), 77);
 		auto parsedAck = proto::parseAck(ack.data(), ack.size());
 		CHECK(parsedAck && parsedAck->hash == hashPalette(p) && parsedAck->seq == 77);
 		std::vector<uint8_t> oldAck(ack.begin(), ack.end() - 4);  // without the offer number
 		CHECK(!proto::parseAck(oldAck.data(), oldAck.size()));
-		// Spectators: a side's palette.
-		for (uint8_t side : {0, 1}) {
-			auto p32 = testPalette(32, 6);
-			auto sidePackets = proto::makeSide(side, 9, 10, 4, hashPalette(p32), p32.serialize());
-			CHECK(sidePackets.size() == 2);
-			for (auto &packet : sidePackets) {
-				CHECK(packet.size() < 1024);
-				auto parsed = proto::parseSide(packet.data(), packet.size());
-				CHECK(parsed && parsed->side == side && parsed->chunk.seq == 9 && parsed->chunk.charId == 10 && parsed->chunk.slot == 4);
-				CHECK(!proto::parsePalette(packet.data(), packet.size()));  // not mistaken for the opponent's
-			}
-		}
 		// The spectator handshake: the cookie rides on the HELLO reply, JOIN echoes it.
 		auto withCookie = proto::makeHello(proto::ROLE_PLAYER, true, 0xC0FFEE42);
 		auto parsedCookie = proto::parseHello(withCookie.data(), withCookie.size());
@@ -228,10 +218,8 @@ namespace {
 		auto zeroJoin = proto::makeJoin(0);
 		CHECK(!proto::parseJoin(zeroJoin.data(), zeroJoin.size()));  // 0 is "no cookie"
 		CHECK(!proto::parseJoin(join.data(), join.size() - 1));
-		CHECK(!proto::parseSide(join.data(), join.size()) && !proto::parseAck(join.data(), join.size()));
-		auto badSide = proto::makeSide(2, 1, 3, 0, hashPalette(p), p.serialize())[0];
-		CHECK(!proto::parseSide(badSide.data(), badSide.size()));  // only sides 0 and 1
-		std::vector<uint8_t> notOurs = {0x05, 'P', 'S', 'H', 'R', 2, 1};
+		CHECK(!proto::parsePalette(join.data(), join.size()) && !proto::parseAck(join.data(), join.size()));
+		std::vector<uint8_t> notOurs = {0x05, 'P', 'S', 'H', 'R', 3, 1};
 		CHECK(!proto::isOurs(notOurs.data(), notOurs.size()));
 	}
 
@@ -305,9 +293,9 @@ namespace {
 		Rng rng{0x5EED1234};
 		auto p16 = testPalette(16, 1), p32 = testPalette(32, 2);
 		std::vector<std::vector<uint8_t>> packets = {proto::makeHello(proto::ROLE_PLAYER, false), proto::makeAck(hashPalette(p16), 5)};
-		for (auto &chunk : proto::makePalette(9, 3, 1, hashPalette(p32), p32.serialize()))
+		for (auto &chunk : proto::makePalette(0, 9, 3, 1, hashPalette(p32), p32.serialize()))
 			packets.push_back(chunk);
-		for (auto &chunk : proto::makeSide(1, 9, 3, 1, hashPalette(p16), p16.serialize()))
+		for (auto &chunk : proto::makePalette(1, 9, 3, 1, hashPalette(p16), p16.serialize()))
 			packets.push_back(chunk);
 		packets.push_back(proto::makeJoin(0x12345678));
 		packets.push_back(proto::makeHello(proto::ROLE_PLAYER, true, 0x12345678));
@@ -317,10 +305,8 @@ namespace {
 			try {
 				if (auto c = proto::parsePalette(d.data(), d.size())) {
 					accepted++;
-					CHECK(c->offset + c->data.size() <= c->totalSize && c->slot <= 7 && c->charId < proto::MAX_CHARACTER_ID);
+					CHECK(c->offset + c->data.size() <= c->totalSize && c->slot <= 7 && c->charId < proto::MAX_CHARACTER_ID && c->side <= 1);
 				}
-				if (auto c = proto::parseSide(d.data(), d.size()))
-					CHECK(c->side <= 1 && c->chunk.offset + c->chunk.data.size() <= c->chunk.totalSize && c->chunk.slot <= 7);
 				proto::parseHello(d.data(), d.size());
 				proto::parseAck(d.data(), d.size());
 				proto::parseJoin(d.data(), d.size());

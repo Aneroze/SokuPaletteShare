@@ -101,8 +101,8 @@ PaletteShare too.
 | `[Debug] Log=1` | `PaletteShare.log` (max 2 MB; previous run in `PaletteShare.prev.log`). Includes opponents' IP addresses. Send both logs with bug reports. |
 
 Testing only, under `[Debug]`:
-- `ForcePaletteLeft=<hash>` / `ForcePaletteRight=<hash>` show a cached palette (`cache\<hash>.pal`)
-  on that side, also offline.
+- `ForcePaletteLeft=<file>` / `ForcePaletteRight=<file>` show a palette file (absolute, or relative
+  to the mod folder) on that side, as if the opponent had sent it, also offline.
 - `HotkeyIgnoresFocus=1` lets the hotkey work without the game focused.
 
 ## Safety
@@ -122,7 +122,6 @@ Testing only, under `[Debug]`:
 - Soku2 and other added characters are left alone.
 - The opponent's palette shows in their preview once it arrives, usually within a fraction of a
   second.
-- Received palettes are cached in `modules\PaletteShare\cache\` (about 0.5 KB each, at most 2000).
 
 ## Build
 
