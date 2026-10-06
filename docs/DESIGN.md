@@ -132,11 +132,11 @@ replacing it, is applied mid-match by the next battle render.
 - [x] **M3 spectators** (2026-10-05): see SIDE above. Spectators are told apart by their scenes
   (LOADINGWATCH 12 / BATTLEWATCH 15; mainMode VSWATCH, subMode REPLAY, so before this they were
   taken for replay playback and got nothing). The spectator's upstream is the game's own peer
-  address (`netUdp.opponent`). Verified with three local games (Copy host, CC2 client, CC3
+  address (`netUdp.opponent`). Verified with three local games (host, client and a
   spectator): the host handed the spectator to the client (127.0.0.1:10802), which served both
   palettes; the spectator showed Green Reimu and inverted Sanae at load, both when watching from
-  the start and when joining mid-battle. With a 4th game (CC4): the second spectator was handed to
-  the first one (CC3 relayed both palettes). Through the public IP (router hairpin, peers seen at
+  the start and when joining mid-battle. With a 4th game: the second spectator was handed to
+  the first one (which relayed both palettes). Through the public IP (router hairpin, peers seen at
   LAN addresses): same results. Full matches (driven to a 2-0 with the harness): both spectators
   saved `[Spectate]` replays with both palettes in the sidecar, and they play back with them.
   Spectators save a replay at the end of the match (BattleWatch 0x4288CB → 0x454240) only when the
@@ -178,6 +178,11 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
 - **Exchange** (2026-10-01): host = blue Reimu from a shady-loader package, guest = inverted Sanae
   from palette-picker 0.2b. Both screens show both custom palettes. With empty caches the bytes
   were transferred, reassembled and hash-checked.
+- **palette-picker on 1.0.0** (2026-10-06): offline, palette-picker's own Reimu palette loads and
+  our picker stays off. Netplay: host with palette-picker 0.2b (its Reimu palette, opponentPalette
+  left at "Don't Force") vs a guest using our picker (Sanae custom, fallback 0): both screens show
+  both custom palettes. A 32-bit file in palette-picker without PaletteTrueColors shows garbled
+  colors locally, which is palette-picker's own behavior.
 - **32-bit**: the host's PaletteTrueColors palette (bpp 32, 1025 bytes) went over in 2 chunks; the
   guest without PaletteTrueColors shows it reduced to 16-bit.
 - **Hotkey**: offline (debug force) inverted → normal → inverted mid-match. In netplay, the

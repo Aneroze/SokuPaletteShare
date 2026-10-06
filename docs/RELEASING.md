@@ -26,8 +26,6 @@ as other SokuLauncher mods.
 
 ## Before 1.0.0 (needs a person, not a script)
 
-0. **CHANGELOG**: replace "not released yet" with the release date.
-
 1. **Two-PC test over the internet**: two players, ideally one through Autopunch/a relay, both
    with a custom palette. Check that both see both palettes, Ctrl+P works, and a match against
    someone without PaletteShare is unaffected. Set `[Debug] Log=1` on both sides to get
