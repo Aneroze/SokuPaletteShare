@@ -105,8 +105,7 @@ replacing it, is applied mid-match by the next battle render.
 - [x] **M0 skeleton** (0.1.0).
 - [x] **M2 netplay** (0.9.0): exchange, palette-picker compatibility, safety, hotkey, late
   palettes. See the tests below.
-- [ ] **1.0.0**: a two-PC test over the internet, then a public repo and a SokuLauncher listing
-  (see `docs/RELEASING.md`).
+- [ ] **1.0.0**: public repo and GitHub release; a SokuLauncher listing later.
 - [x] **M1 own picker** (done for 1.0.0, 2026-10-02; Soku2/modded characters deferred indefinitely): custom palettes from a folder (`.pal` / `.act` / `.bmp`) and a picker at
   character select, replacing palette-picker. Requirement (user, 2026-10-01): **the fallback must
   be obvious.** Players without PaletteShare only get the slot number, so:
