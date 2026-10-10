@@ -45,4 +45,22 @@ namespace ps::game {
 		}
 		return state == 1;
 	}
+
+	UINT textCodePage()
+	{
+		static const UINT codePage = [] {
+			UINT cp = 932;
+			if (HMODULE intl = GetModuleHandleA("th123intl.dll")) {
+				if (auto get = reinterpret_cast<unsigned (*)()>(GetProcAddress(intl, "GetTextCodePage")))
+					cp = get();
+				if (!IsValidCodePage(cp)) {
+					log("th123intl says the game's text is in code page %u, which Windows doesn't have: using 932", cp);
+					cp = 932;
+				}
+			}
+			log("game text code page: %u%s", cp, GetModuleHandleA("th123intl.dll") ? " (from th123intl)" : "");
+			return cp;
+		}();
+		return codePage;
+	}
 }

@@ -78,6 +78,10 @@ namespace ps::menu {
 					setDefaultFallback(_charId, (_lib.defaultFallback + side + 8) % 8);
 					refresh();
 					SokuLib::playSEWaveBuffer(SE_MOVE);
+				} else if ((side || in.a == 1) && isHideRow()) {
+					setHideGameSlots(_charId, !_lib.hideGameSlots);
+					refresh();
+					SokuLib::playSEWaveBuffer(side ? SE_MOVE : SE_OK);
 				}
 
 				if (in.c == 1 && isPaletteRow() && !_lib.palettes[_row].fallbackIsDefault) {
@@ -145,12 +149,19 @@ namespace ps::menu {
 					_text.draw("Character default fallback", px - 10, y + 210);
 					_fallback.showSlot(_charId, _lib.defaultFallback, px + 70, y + 350, 120);
 					drawOriginalNote(_lib.defaultFallback, px - 10, y + 354);
+				} else if (isHideRow()) {
+					_custom.clear();
+					_fallback.clear();
+					_text.draw("At character select, list:", px - 10, y + 50);
+					_text.draw(_lib.hideGameSlots ? "Only your palettes" : "The game's 8 and yours", px, y + 68);
+					if (_lib.hideGameSlots && _lib.palettes.empty())
+						_text.draw("(the game's while you have none)", px, y + 86);
 				} else {
 					_custom.clear();
 					_fallback.clear();
 				}
 
-				_text.draw("Up/Down select   Left/Right fallback   " + key(ui::Button::C) + " use default   " +
+				_text.draw("Up/Down select   Left/Right change   " + key(ui::Button::C) + " use default   " +
 					key(ui::Button::B) + " back", x + 16, y + h - 26);
 			}
 
@@ -162,11 +173,12 @@ namespace ps::menu {
 					_text.draw("Original colors (your game's differ)", x, y);
 			}
 
-			int rowCount() const { return static_cast<int>(_lib.palettes.size()) + 3; }
+			int rowCount() const { return static_cast<int>(_lib.palettes.size()) + 4; }
 			bool isPaletteRow() const { return _row < static_cast<int>(_lib.palettes.size()); }
 			bool isDefaultRow() const { return _row == static_cast<int>(_lib.palettes.size()); }
-			bool isFolderRow() const { return _row == static_cast<int>(_lib.palettes.size()) + 1; }
-			bool isCloseRow() const { return _row == static_cast<int>(_lib.palettes.size()) + 2; }
+			bool isHideRow() const { return _row == static_cast<int>(_lib.palettes.size()) + 1; }
+			bool isFolderRow() const { return _row == static_cast<int>(_lib.palettes.size()) + 2; }
+			bool isCloseRow() const { return _row == static_cast<int>(_lib.palettes.size()) + 3; }
 
 			void refresh()
 			{
@@ -193,6 +205,9 @@ namespace ps::menu {
 					_text.draw("Character default", x, y);
 					_text.draw(ui::slotName(_lib.defaultFallback), x + 150, y);
 				} else if (r == n + 1) {
+					_text.draw("Game palettes", x, y);
+					_text.draw(_lib.hideGameSlots ? "Hidden" : "Shown", x + 150, y);
+				} else if (r == n + 2) {
 					_text.draw("Open palette folder", x, y);
 				} else {
 					_text.draw("Close", x, y);

@@ -87,6 +87,7 @@ namespace ps {
 
 			auto ini = (lib.folder / L"palettes.ini").wstring();
 			lib.defaultFallback = std::clamp<int>(GetPrivateProfileIntW(L"default", L"fallback", 0, ini.c_str()), 0, 7);
+			lib.hideGameSlots = GetPrivateProfileIntW(L"default", L"hideGamePalettes", 0, ini.c_str()) != 0;
 
 			for (int who = 0; who < 2; who++) {
 				wchar_t buffer[256];
@@ -254,6 +255,22 @@ namespace ps {
 		g_stamp[charId] = stampOf(lib.folder);
 		backup::character(lib.folderName);
 		log("library: %ls default fallback set to %d", lib.folderName.c_str(), slot);
+	}
+
+	void setHideGameSlots(int charId, bool hide)
+	{
+		std::lock_guard lock(g_mutex);
+		auto it = g_cache.find(charId);
+		if (it == g_cache.end() || it->second.folder.empty())
+			return;
+		auto &lib = it->second;
+		lib.hideGameSlots = hide;
+		auto ini = (lib.folder / L"palettes.ini").wstring();
+		ensureUnicode(ini);
+		WritePrivateProfileStringW(L"default", L"hideGamePalettes", hide ? L"1" : nullptr, ini.c_str());
+		g_stamp[charId] = stampOf(lib.folder);
+		backup::character(lib.folderName);
+		log("library: %ls game palettes %s at character select", lib.folderName.c_str(), hide ? "hidden" : "shown");
 	}
 
 	void addModdedSlots(CharacterLibrary &lib, bool originals)

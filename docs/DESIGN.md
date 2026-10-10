@@ -91,6 +91,64 @@ Offers are made from the character-select preview as the player browses, and aga
 no-op if unchanged). A palette received after the opponent's character loaded, or a newer one
 replacing it, is applied mid-match by the next battle render.
 
+## Saving opponents' palettes (1.1.0)
+
+`src/saved.cpp`: one folder, `<game folder>\PaletteShare\saved` (the mod folder's `saved` if the
+game folder isn't writable), with `<character>-<profile>-NN.pal` in the game's .pal format. The
+palette saved is the checked one we show (transparency locked, Okuu's cloak color ours), taken where
+the opponent's custom palette is applied: at load (`paletteReady`) and for late palettes
+(`pickUpLatePalette`), only for the opponent as a player (not spectating, replays or debug forces).
+The profile name is `NetObject::profile1name` (host, side 0) / `profile2name` (client). A
+background thread writes the files (temp file + rename, never over another file) and skips a
+palette that character/player already has. The save hotkey takes the opponent's select preview
+palette (`g_selectShown`) or their in-match one; `[Save] AutoSave=0` turns the automatic saves off.
+
+`src/iniupgrade.cpp`: `IniVersion` + rebuild of older inis from the shipped ini embedded in the DLL
+(`src/PaletteShare.rc`), same rules as DisplayManager's. 1.0.0 fixup: a missing `[Hotkey]` Key or
+Modifier meant none, so it's written as an empty value.
+
+Hiding the game's palettes (requested by Tstar_CN, like palette-picker's per-character
+"useDefaults"): the palette menu's "Game palettes" row writes `[default] hideGamePalettes=1` to the
+character's `palettes.ini`. The select-screen list (`Pick::listed`) then skips slots 0-7 that no
+palette mod replaces and "Original NN" entries; `step()`, the header count and the starting entry
+follow it. Without anything else to list, the game's slots stay. Only the list changes: the wheel
+is still steered to the fallback slot. Verified in Practice (Reimu, 2 custom palettes: "Palette
+1/2", wrapping between the two).
+
+`[Replay] SaveMetadata=0` (`replay::setSaving`): our key is always cleared instead of set, the same
+path as a match without custom palettes, so no sidecar is written (and a stale one of the same name
+loses our key). Playback still reads existing sidecars.
+
+Text code page (reported by the Chinese community, who play with th123intl in Chinese): the game
+decodes the text it draws as Shift-JIS, but th123intl rewrites that loop to use its own locale's
+code page (and patches the font charset at 0x411c64), so our Shift-JIS file names came out garbled.
+th123intl exports `GetTextCodePage()` for other mods (since 0.3, 2023; also in soku-cn's 1.0.11
+build): 936 in Chinese, 1252 in English, 932 in Japanese. `game::textCodePage()` asks it once
+(932 without it) and `ui::narrow` encodes in it. Profile names in netplay are raw bytes in the
+sender's Windows code page (no released th123intl converts them; UTF-8 names exist only in
+unreleased 2025 commits), so `saved::decodeName` reads them in the text code page if valid there,
+else the system's. Verified on Copy with 测试灵梦/霊夢テスト/Café Reimu: th123intl zh shows all
+three (before: ???冼 and 梻柌僥僗僩); without th123intl unchanged (Japanese yes, simplified hanzi
+?); th123intl en shows Café, CJK as ?.
+
+Names font (鱼的千千): our text is Tahoma, so Chinese names fell back to SimSun (serif, hard to read
+at this size). Strings with non-ASCII characters now use the font th123intl gives the game's
+profile names. th123intl redirects the call that sets that font up (`0x434DE1` → its `setFont`,
+which writes its language's overrides into the description before `0x411840`), so `ui::Text` runs
+the redirected target on a scratch font and keeps the face it wrote (`simhei` in Chinese). Only
+when the target is inside th123intl.dll; else SimHei for Chinese code pages, else Tahoma as before.
+ASCII strings keep Tahoma. Verified on Copy with th123intl zh ("names font: simhei").
+
+Fallback key (鱼的千千): D (the A key) edited the fallback and was kept from the game, but at the
+palette step D is the game's random deck, which also confirms (stage 1 handler `0x42064A`: random
+deck byte +0xF, stage 3). `[Picker] FallbackButton` (default `Switch`, card switch = S; also
+`Spell`, `D`, `None`) edits now. D is a confirm again, sent through the picker like A (steered to
+the fallback slot first, then held as D, bit 0x80), so the game picks the random deck and our
+custom palette is still the one confirmed. Input bits: A 0x10 .. D 0x80, card switch 0x100, spell
+0x200 (`0x40A482`). Verified in Practice: D → stage 3 + random-deck flag, "confirmed ... (D: random
+deck)"; S opens the edit, S saves, X cancels, D does nothing while editing. Harness note: `nav d`
+is Down (case-insensitive token); a real D is `nav =d 10`.
+
 ## Anti-abuse
 
 - `lockTransparency`: received colors keep, index by index, exactly the transparency of the

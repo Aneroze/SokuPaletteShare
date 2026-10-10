@@ -83,6 +83,72 @@ namespace ps::ui {
 		return moddedSlot(charId, slot).has_value();
 	}
 
+	namespace {
+		constexpr DWORD PROFILE_FONT_CALL = 0x434DE1;  // the game sets up its profile-name font
+		constexpr DWORD SET_FONT = 0x411840;           // SWRFont::setIndirect
+
+		// The face th123intl gives profile names in its language ("simhei" for Chinese), or empty
+		// when th123intl isn't there or leaves the game's font. th123intl redirects the game's call
+		// that sets the profile font up to its own function, which writes its language's font into
+		// the description before setting it: run that on a scratch font to read the face.
+		std::string profileFace()
+		{
+			HMODULE intl = GetModuleHandleA("th123intl.dll");
+			if (!intl)
+				return "";
+			std::string face;
+			auto site = reinterpret_cast<const uint8_t *>(PROFILE_FONT_CALL);
+			if (site[0] == 0xE8) {
+				int32_t rel;
+				memcpy(&rel, site + 1, 4);
+				DWORD target = PROFILE_FONT_CALL + 5 + rel;
+				HMODULE owner = nullptr;
+				GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+					reinterpret_cast<LPCSTR>(target), &owner);
+				if (target != SET_FONT && owner == intl) {
+					SokuLib::SWRFont font;
+					font.create();
+					SokuLib::FontDescription desc{};
+					strcpy(desc.faceName, "Tahoma");
+					desc.height = 14;
+					desc.weight = 400;
+					reinterpret_cast<void (__fastcall *)(SokuLib::SWRFont *, void *, SokuLib::FontDescription *)>(target)(&font, nullptr, &desc);
+					font.destruct();
+					desc.faceName[sizeof(desc.faceName) - 1] = 0;
+					if (strcmp(desc.faceName, "Tahoma") != 0)
+						face = desc.faceName;
+				}
+			}
+			// Some other th123intl build: Chinese at least gets the font it ships.
+			UINT cp = game::textCodePage();
+			if (face.empty() && (cp == 936 || cp == 54936))
+				face = "SimHei";
+			log("names font: %s", face.empty() ? "Tahoma (th123intl leaves the profile font)" : face.c_str());
+			return face;
+		}
+
+		bool isAscii(const std::string &s)
+		{
+			return std::all_of(s.begin(), s.end(), [](char c) { return static_cast<unsigned char>(c) < 0x80; });
+		}
+
+		std::unique_ptr<SokuLib::SWRFont> makeFont(const char *face, int height)
+		{
+			auto font = std::make_unique<SokuLib::SWRFont>();
+			font->create();
+			SokuLib::FontDescription desc{};
+			strncpy(desc.faceName, face, sizeof(desc.faceName) - 1);
+			desc.r1 = desc.r2 = desc.g1 = desc.g2 = 255;
+			desc.b1 = 250;
+			desc.b2 = 120;
+			desc.height = height;
+			desc.weight = 400;
+			desc.shadow = true;
+			font->setIndirect(desc);
+			return font;
+		}
+	}
+
 	Text::Text(int height) : _height(height) {}
 
 	Text::~Text()
@@ -92,28 +158,22 @@ namespace ps::ui {
 				SokuLib::textureMgr.remove(sprite->dxHandle);
 		if (_font)
 			_font->destruct();
+		if (_nameFont)
+			_nameFont->destruct();
 	}
 
 	void Text::draw(const std::string &text, float x, float y)
 	{
-		if (!_font) {
-			_font = std::make_unique<SokuLib::SWRFont>();
-			_font->create();
-			SokuLib::FontDescription desc{};
-			strcpy(desc.faceName, "Tahoma");
-			desc.r1 = desc.r2 = desc.g1 = desc.g2 = 255;
-			desc.b1 = 250;
-			desc.b2 = 120;
-			desc.height = _height;
-			desc.weight = 400;
-			desc.shadow = true;
-			_font->setIndirect(desc);
-		}
 		auto &sprite = _sprites[text];
 		if (!sprite) {
+			static const std::string nameFace = profileFace();
+			const bool name = !nameFace.empty() && !isAscii(text);
+			auto &font = name ? _nameFont : _font;
+			if (!font)
+				font = makeFont(name ? nameFace.c_str() : "Tahoma", _height);
 			sprite = std::make_unique<SokuLib::Sprite>();
 			int tex = 0;
-			SokuLib::textureMgr.createTextTexture(&tex, text.c_str(), *_font, 300, _height + 4, nullptr, nullptr);
+			SokuLib::textureMgr.createTextTexture(&tex, text.c_str(), *font, 300, _height + 4, nullptr, nullptr);
 			sprite->setTexture2(tex, 0, 0, 300, _height + 4);
 		}
 		sprite->render(x, y);
@@ -267,14 +327,14 @@ namespace ps::ui {
 
 	std::string narrow(const std::wstring &w)
 	{
-		// The game draws text as Shift-JIS (code page 932) whatever the system's code page: so
-		// Japanese file names show up right, and characters it can't show become '?'.
-		constexpr UINT SHIFT_JIS = 932;
-		int n = WideCharToMultiByte(SHIFT_JIS, 0, w.c_str(), -1, nullptr, 0, "?", nullptr);
+		// The game decodes text in its own code page whatever the system's (Shift-JIS, or th123intl's):
+		// so names in that language show up right, and characters it can't show become '?'.
+		UINT codePage = game::textCodePage();
+		int n = WideCharToMultiByte(codePage, 0, w.c_str(), -1, nullptr, 0, "?", nullptr);
 		if (n <= 0)
 			return std::string(w.begin(), w.end());  // no such code page (unlikely): ASCII as is
 		std::string s(n - 1, '\0');
-		WideCharToMultiByte(SHIFT_JIS, 0, w.c_str(), -1, s.data(), n, "?", nullptr);
+		WideCharToMultiByte(codePage, 0, w.c_str(), -1, s.data(), n, "?", nullptr);
 		return s;
 	}
 
@@ -285,7 +345,9 @@ namespace ps::ui {
 
 	std::string buttonName(const SokuLib::KeymapManager *keys, Button button)
 	{
-		static const char *const defaults[] = {"Z", "X", "C", "A"};  // the game's default keyboard keys
+		static const char *const defaults[] = {"Z", "X", "C", "A", "S", "D"};  // the game's default keyboard keys
+		if (button == Button::None)
+			return "";
 		const int i = static_cast<int>(button);
 		if (!keys)
 			return defaults[i];
@@ -304,6 +366,17 @@ namespace ps::ui {
 			if (name[k] < 0x20 || name[k] > 0x7E || name[k] == '<')  // non-ASCII, or the renderer's markup
 				return "Key " + std::to_string(code);
 		return std::string(name, n);
+	}
+
+	uint16_t buttonBit(Button button)
+	{
+		// up 1, down 2, left 4, right 8, then A 0x10 .. Spell 0x200 (see 0x40A482)
+		return button == Button::None ? 0 : static_cast<uint16_t>(0x10 << static_cast<int>(button));
+	}
+
+	int *buttonInput(SokuLib::KeyInput &in, Button button)
+	{
+		return button == Button::None ? nullptr : &in.a + static_cast<int>(button);
 	}
 
 }

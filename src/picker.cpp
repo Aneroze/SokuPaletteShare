@@ -54,6 +54,9 @@ namespace ps::picker {
 			std::optional<LibraryPalette> mods[8];
 			// This game's palette for each slot, to preview a slot before the wheel reaches it.
 			std::optional<Palette> slotPalettes[8];
+			// The player hides the game's palettes for this character (palette menu) and has some
+			// of their own: the list skips the game's slots and "Original NN" entries.
+			bool hideGameSlots = false;
 			bool previewDirty = false;
 			Steer steer = Steer::Idle;
 			int wheelAtPress = -1;
@@ -67,13 +70,15 @@ namespace ps::picker {
 			int takenSlot = -1;
 			std::optional<Palette> takenPalette;
 			bool pendingConfirm = false;
-			// Frames since we sent the confirm (A), -1 = none sent. Online the game applies it only
+			// The confirm is D (the game's random deck, which also confirms) instead of A.
+			bool confirmWithD = false;
+			// Frames since we sent the confirm (A or D), -1 = none sent. Online the game applies it only
 			// after the netplay delay; until then the list and the wheel must not move, or the slot
 			// (and our confirmed palette) would change under the confirm.
 			int confirmSent = -1;
 			int confirmRetries = 0;
 			bool inSubmenu = false;  // a submenu was open over the select screen last frame
-			bool editing = false;    // D: changing the highlighted palette's fallback
+			bool editing = false;    // changing the highlighted palette's fallback
 			const SokuLib::KeymapManager *keys = nullptr;  // drives this pick (for the key hints)
 			int editSlot = 0;
 			// what was confirmed, kept for the loading screen
@@ -103,6 +108,28 @@ namespace ps::picker {
 			int bumped(int slot) const { return slot == takenSlot ? (slot + 1) % 8 : slot; }
 			int target() const { return bumped(wantedSlot()); }
 
+			// Whether the list shows the entry.
+			bool listed(int i) const
+			{
+				if (!hideGameSlots)
+					return true;
+				auto p = entry(i);
+				return p && p->originalSlot < 0;
+			}
+			int listedCount() const
+			{
+				int n = 0;
+				for (int i = 0; i < count(); i++)
+					n += listed(i);
+				return n;
+			}
+			int listedPosition() const  // 1-based, of the highlighted entry
+			{
+				int n = 0;
+				for (int i = 0; i <= index && i < count(); i++)
+					n += listed(i);
+				return n;
+			}
 			// Entries the other side of a mirror match already uses: its slot, or its palette.
 			bool taken(int i) const
 			{
@@ -111,13 +138,13 @@ namespace ps::picker {
 				auto p = entry(i);
 				return p && takenPalette && sameColors(p->palette, *takenPalette);
 			}
-			// The nearest entry in that direction the other side doesn't use (the game's skip).
+			// The nearest listed entry in that direction the other side doesn't use (the game's skip).
 			int step(int from, int direction) const
 			{
 				int i = from;
 				for (int n = 0; n < count(); n++) {
 					i = (i + direction + count()) % count();
-					if (!taken(i))
+					if (listed(i) && !taken(i))
 						return i;
 				}
 				return from;
@@ -221,6 +248,9 @@ namespace ps::picker {
 			}
 			for (int slot = 0; slot < 8; slot++)
 				pick.slotPalettes[slot] = ui::gameSlot(charId, slot);
+			pick.hideGameSlots = pick.lib.hideGameSlots;
+			if (pick.hideGameSlots && pick.listedCount() == 0)
+				pick.hideGameSlots = false;  // none of their own: the game's palettes after all
 			return modded;
 		}
 
@@ -240,8 +270,8 @@ namespace ps::picker {
 				pick.index = pick.lib.lastSlot[who];
 			}
 			pick.previewDirty = true;
-			log("picker: palette step for side=%d char=%d, %d custom palette(s), %d slot(s) replaced by palette mods, starting at %d", side,
-				charId, (int)pick.lib.palettes.size(), modded, pick.index);
+			log("picker: palette step for side=%d char=%d, %d custom palette(s), %d slot(s) replaced by palette mods, starting at %d%s", side,
+				charId, (int)pick.lib.palettes.size(), modded, pick.index, pick.hideGameSlots ? ", game palettes hidden" : "");
 		}
 
 		// After a submenu (e.g. the palette menu from the deck screen): fallbacks or files may have
@@ -257,6 +287,8 @@ namespace ps::picker {
 			for (int i = 8; i < pick.count(); i++)
 				if (pick.lib.palettes[i - 8].name == name)
 					pick.index = i;
+			if (!pick.listed(pick.index) || pick.taken(pick.index))  // e.g. the game's palettes were just hidden
+				pick.index = pick.step(pick.index, 1);
 			pick.previewDirty = true;
 			pick.presses = 0;
 			pick.unreachable = -1;
@@ -295,7 +327,23 @@ namespace ps::picker {
 
 		int menuMove(int axis) { return game::menuMove(axis); }
 
-		// Edit mode: Up/Down choose the slot, D or A save, B cancels. Nothing reaches the game.
+		// The fallback button's held frames (0 when it's off).
+		int fallbackPressed(SokuLib::KeyInput &in)
+		{
+			const int *button = ui::buttonInput(in, config.fallbackButton);
+			return button ? *button : 0;
+		}
+
+		// Keeps the fallback button away from the game.
+		void swallowFallbackButton(SokuLib::KeyInput &in, uint16_t &bits)
+		{
+			if (int *button = ui::buttonInput(in, config.fallbackButton))
+				*button = 0;
+			bits &= ~ui::buttonBit(config.fallbackButton);
+		}
+
+		// Edit mode: Up/Down choose the slot, the fallback button or A save, B cancels. Nothing
+		// reaches the game.
 		void driveEdit(Pick &pick, SokuLib::KeyInput &in)
 		{
 			auto custom = pick.custom();
@@ -303,7 +351,7 @@ namespace ps::picker {
 				pick.editSlot = (pick.editSlot + move + 8) % 8;
 				moveSound();
 			}
-			if (in.d == 1 || in.a == 1) {
+			if (fallbackPressed(in) == 1 || in.a == 1) {
 				pick.editing = false;
 				if (custom->fallback != pick.editSlot || custom->fallbackIsDefault) {
 					setFallback(pick.charId, custom->name, pick.editSlot);
@@ -341,8 +389,8 @@ namespace ps::picker {
 				startPick(pick, side, charId, wheel);
 			pick.keys = mgr;
 			updateMirror(sel, side, pick);
-			if (starting && pick.taken(pick.index))
-				pick.index = pick.step(pick.index, 1);  // the remembered choice is the other side's
+			if (starting && (pick.taken(pick.index) || !pick.listed(pick.index)))
+				pick.index = pick.step(pick.index, 1);  // the remembered choice is the other side's, or hidden
 
 			// A submenu (C: profile/deck menus) opened over the select screen gets the keys untouched.
 			if (submenuOpen()) {
@@ -365,12 +413,13 @@ namespace ps::picker {
 			if (pick.confirmSent >= 0) {
 				if (++pick.confirmSent <= CONFIRM_TIMEOUT_FRAMES) {
 					in.verticalAxis = 0;
-					in.d = 0;
-					bits &= ~(1 | 2 | 128);
-					// A stays held like a key until the game takes it (we stop here once it did).
+					swallowFallbackButton(in, bits);
+					bits &= ~(1 | 2);
+					// The confirm stays held like a key until the game takes it (we stop here once it did).
 					bool hold = pick.confirmSent < MAX_HOLD_FRAMES;
-					in.a = hold ? pick.confirmSent + 1 : 0;
-					bits = hold ? (bits | 16) : (bits & ~16);
+					in.a = hold && !pick.confirmWithD ? pick.confirmSent + 1 : 0;
+					in.d = hold && pick.confirmWithD ? pick.confirmSent + 1 : 0;
+					bits = (bits & ~(16 | 128)) | (hold ? (pick.confirmWithD ? 128 : 16) : 0);
 					return true;
 				}
 				pick.confirmSent = -1;
@@ -396,12 +445,16 @@ namespace ps::picker {
 					pick.unreachable = -1;
 					pick.confirmed = false;
 				}
-				if (in.a == 1) {
+				// A confirms; so does D, with the game's random deck. Either is sent on once the wheel
+				// is on the slot to confirm.
+				const bool dConfirms = config.fallbackButton != ui::Button::D;
+				if (in.a == 1 || (dConfirms && in.d == 1)) {
 					pick.pendingConfirm = true;
+					pick.confirmWithD = in.a != 1;
 					pick.confirmRetries = 0;
 				}
-				// D edits the highlighted palette's fallback (it replaces the game's random palette).
-				if (in.d == 1 && pick.custom() && pick.custom()->originalSlot < 0) {
+				// The fallback button edits the highlighted palette's fallback.
+				if (fallbackPressed(in) == 1 && pick.custom() && pick.custom()->originalSlot < 0) {
 					pick.editing = true;
 					pick.editSlot = pick.custom()->fallback;
 					pick.pendingConfirm = false;
@@ -459,9 +512,9 @@ namespace ps::picker {
 			bool settled = pick.steer == Steer::Idle && (wheel == target || pick.unreachable == target);
 
 			// 3. Confirm only once settled, so the slot we confirm is the fallback.
-			int emitA = 0;
+			int emitConfirm = 0;
 			if (!pick.editing && pick.pendingConfirm && settled) {
-				emitA = 1;
+				emitConfirm = 1;
 				pick.pendingConfirm = false;
 				pick.confirmSent = 0;
 				pick.confirmed = true;
@@ -469,14 +522,16 @@ namespace ps::picker {
 				auto custom = pick.custom();
 				pick.confirmedCustom = custom ? std::optional<Palette>(custom->palette) : std::nullopt;
 				rememberSelection(charId, memoryOf(side), custom ? custom->name : L"", custom ? -1 : pick.index);
-				log("picker: confirmed side=%d char=%d %ls, game slot %d", side, charId, custom ? displayName(*custom).c_str() : L"(vanilla)", wheel);
+				log("picker: confirmed side=%d char=%d %ls, game slot %d%s", side, charId, custom ? displayName(*custom).c_str() : L"(vanilla)", wheel,
+					pick.confirmWithD ? " (D: random deck)" : "");
 			}
 
+			swallowFallbackButton(in, bits);
 			in.verticalAxis = emitV;
-			in.a = emitA;
-			in.d = 0;
+			in.a = emitConfirm && !pick.confirmWithD;
+			in.d = emitConfirm && pick.confirmWithD;
 			bits &= ~(1 | 2 | 16 | 128);
-			bits |= (emitV < 0 ? 1 : 0) | (emitV > 0 ? 2 : 0) | (emitA ? 16 : 0);
+			bits |= (emitV < 0 ? 1 : 0) | (emitV > 0 ? 2 : 0) | (in.a ? 16 : 0) | (in.d ? 128 : 0);
 			if (editing) {
 				// Keep B (and the deck/submenu keys) away from the game while editing.
 				in.horizontalAxis = 0;
@@ -608,7 +663,7 @@ namespace ps::picker {
 			ui::drawBox(x + 170, y + 4, 1, PANEL_H - 8, 0x60FFFFFF, 0);
 
 			// Header and the list: the highlighted entry with one above and one below
-			g_text.draw("Palette  " + std::to_string(pick.index + 1) + "/" + std::to_string(pick.count()), x + 8, y + 2);
+			g_text.draw("Palette  " + std::to_string(pick.listedPosition()) + "/" + std::to_string(pick.listedCount()), x + 8, y + 2);
 			if (size_t n = pick.lib.skipped.size())  // the palette menu lists them with the reason
 				g_text.draw(std::to_string(n) + (n == 1 ? " file skipped" : " files skipped"), x + 92, y + 2);
 			const float listY = y + 18 + ROW;
@@ -648,7 +703,7 @@ namespace ps::picker {
 			}
 			if (pick.editing) {
 				g_text.draw("Fallback: " + ui::slotName(pick.editSlot) + " ?", x + 8, infoY);
-				g_text.draw("Up/Down  " + key(pick, ui::Button::D) + " save  " + key(pick, ui::Button::B) + " cancel", x + 8, infoY + ROW);
+				g_text.draw("Up/Down  " + key(pick, config.fallbackButton) + " save  " + key(pick, ui::Button::B) + " cancel", x + 8, infoY + ROW);
 				return;
 			}
 			bool original = custom->originalSlot >= 0;
@@ -669,8 +724,8 @@ namespace ps::picker {
 			case net::PeerStatus::Incompatible: g_text.draw("Opponent sees " + ui::slotName(pick.target()), x + 8, infoY + ROW); break;
 			case net::PeerStatus::Checking: g_text.draw("Opponent: checking...", x + 8, infoY + ROW); break;
 			default:
-				if (!original)
-					g_text.draw(key(pick, ui::Button::D) + ": change fallback", x + 8, infoY + ROW);
+				if (!original && config.fallbackButton != ui::Button::None)
+					g_text.draw(key(pick, config.fallbackButton) + ": change fallback", x + 8, infoY + ROW);
 				break;
 			}
 		}
@@ -718,6 +773,7 @@ namespace ps::picker {
 			// Ctrl+P works here too: the opponent's preview follows it.
 			if (pollOpponentToggle())
 				g_refreshOpponent = true;
+			pollSaveHotkey(true);
 			refreshOpponentPreview(sel);
 			if (disabled())
 				return;
@@ -733,7 +789,7 @@ namespace ps::picker {
 
 		void afterRender(SokuLib::Select *sel)
 		{
-			drawToggleNotice();
+			drawNotice();
 			if (disabled())
 				return;
 			std::lock_guard lock(g_mutex);

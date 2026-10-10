@@ -15,6 +15,7 @@
 //
 //   [default]
 //   fallback=0               ; slot used by palettes that have no fallback of their own (default 0)
+//   hideGamePalettes=1       ; the character select list leaves out the game's palettes (default 0)
 //   [palette:Blue Reimu]     ; file name without extension
 //   fallback=3
 //   [last] / [last2p]        ; the last choice of player 1 (our side online) / player 2 offline
@@ -52,6 +53,9 @@ namespace ps {
 		std::wstring folderName;
 		std::filesystem::path folder;     // the character's folder: palettes.ini lives here
 		int defaultFallback = 0;
+		// The character select list shows only the player's palettes (and slots palette mods
+		// replace), not the game's own slots; ignored while the player has none.
+		bool hideGameSlots = false;
 		std::vector<LibraryPalette> palettes;  // sorted by name
 		std::vector<SkippedFile> skipped;      // palette-like files that couldn't be read
 		// Last choice, [0] the player's own (player 1, or our side online), [1] player 2's offline.
@@ -71,6 +75,8 @@ namespace ps {
 	void clearFallback(int charId, const std::wstring &name);
 	// The slot used by palettes without their own fallback.
 	void setDefaultFallback(int charId, int slot);
+	// Saves whether the character select list leaves out the game's palettes.
+	void setHideGameSlots(int charId, bool hide);
 
 	// Adds a "Mod NN" entry in front of the library's palettes for each slot this game shows
 	// differently from the original (see above), and with `originals` an "Original NN" entry with

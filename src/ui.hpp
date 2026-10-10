@@ -1,6 +1,7 @@
 #pragma once
 #include <windows.h>
 #include <SokuLib.hpp>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -10,7 +11,8 @@
 // Small drawing helpers shared by the picker and the palette menu. All coordinates are in the
 // 640x480 game frame; everything runs on the render thread.
 namespace ps::ui {
-	// Cached text sprites (one texture per distinct string).
+	// Cached text sprites (one texture per distinct string). Strings with non-ASCII characters (names)
+	// use the font the game's language gives profile names, when that isn't the game's own.
 	class Text {
 	public:
 		explicit Text(int height = 13);
@@ -21,7 +23,7 @@ namespace ps::ui {
 
 	private:
 		int _height;
-		std::unique_ptr<SokuLib::SWRFont> _font;
+		std::unique_ptr<SokuLib::SWRFont> _font, _nameFont;
 		std::map<std::string, std::unique_ptr<SokuLib::Sprite>> _sprites;
 	};
 
@@ -51,7 +53,7 @@ namespace ps::ui {
 		float _fit = 1, _dx = 0, _dy = 0;
 	};
 
-	// Text for the game's renderer (Shift-JIS).
+	// Text for the game's renderer (in game::textCodePage(); what it can't hold becomes '?').
 	std::string narrow(const std::wstring &w);
 	std::string slotName(int slot);
 	// Whether this game shows a slot differently from the game's original colors (a shady-loader
@@ -66,6 +68,10 @@ namespace ps::ui {
 	// What to press for a game button, as bound in that keymap: the keyboard key's name ("Z", "A")
 	// or the gamepad button ("Pad3"). Hints use this rather than the game's button letters, since
 	// the D button is the A key by default.
-	enum class Button { A, B, C, D };
+	enum class Button { A, B, C, D, Switch, Spell, None };  // in the keymaps' order; Switch = card switch
+	// The game's bit for a button in a keymap's input bits (0 for None).
+	uint16_t buttonBit(Button button);
+	// That button's held-frames counter in decoded keys, or null for None.
+	int *buttonInput(SokuLib::KeyInput &in, Button button);
 	std::string buttonName(const SokuLib::KeymapManager *keys, Button button);
 }

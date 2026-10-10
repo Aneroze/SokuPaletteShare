@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.20)
 set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-project(PaletteShare VERSION 1.0.0 LANGUAGES CXX ASM_MASM)
+project(PaletteShare VERSION 1.1.0 LANGUAGES CXX ASM_MASM RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,12 +61,24 @@ add_library(PaletteShare MODULE
 	src/metaformat.cpp
 	src/original.hpp
 	src/original.cpp
+	src/saved.hpp
+	src/saved.cpp
+	src/iniupgrade.hpp
+	src/iniupgrade.cpp
+	src/PaletteShare.rc
 )
 target_compile_definitions(PaletteShare PRIVATE
 	NOMINMAX _CRT_SECURE_NO_WARNINGS
 	_WIN32_WINNT=0x0601 WINVER=0x0601  # Windows 7: no newer Windows API by accident # no WIN32_LEAN_AND_MEAN: SokuLib's headers need winsock from <windows.h>
 	PALETTESHARE_VERSION="${PROJECT_VERSION}")
 target_include_directories(PaletteShare PRIVATE thirdparty)  # nlohmann/json.hpp (3.9.1, MIT)
+# The shipped ini, embedded for the ini upgrade (src/PaletteShare.rc finds it through the project root).
+set_property(SOURCE src/PaletteShare.rc APPEND PROPERTY OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/PaletteShare.ini")
+set_property(SOURCE src/PaletteShare.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}")
+file(STRINGS "${CMAKE_SOURCE_DIR}/PaletteShare.ini" _ps_ini_version REGEX "^IniVersion=")
+if(NOT _ps_ini_version STREQUAL "IniVersion=${PROJECT_VERSION}")
+	message(WARNING "PaletteShare.ini has '${_ps_ini_version}', expected 'IniVersion=${PROJECT_VERSION}'")
+endif()
 target_compile_options(PaletteShare PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W3 /utf-8>)
 target_link_libraries(PaletteShare PRIVATE SokuLib shlwapi ws2_32 shell32)
 set_target_properties(PaletteShare PROPERTIES PREFIX "")
@@ -82,6 +94,8 @@ add_executable(PaletteShareTests EXCLUDE_FROM_ALL
 	src/palettefile.cpp
 	src/log.cpp
 	src/backup.cpp
+	src/saved.cpp
+	src/iniupgrade.cpp
 )
 target_include_directories(PaletteShareTests PRIVATE thirdparty)
 target_compile_definitions(PaletteShareTests PRIVATE

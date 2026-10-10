@@ -22,6 +22,7 @@ namespace ps::replay {
 
 		std::mutex g_mutex;
 		Entry g_recorded[2];
+		bool g_saving = true;
 
 		std::optional<int> intField(const nlohmann::json &object, const char *key)
 		{
@@ -40,7 +41,9 @@ namespace ps::replay {
 				if (e.palette && e.palette->valid())
 					palettes[SIDES[side]] = {{"character", e.charId}, {"slot", e.slot}, {"palette", base64::encode(e.palette->serialize())}};
 			}
-			if (palettes.empty())
+			// Off: cleared rather than left alone, so a sidecar left by a deleted replay of the same
+			// name doesn't keep our data from that other match.
+			if (palettes.empty() || !g_saving)
 				meta::clearPending(KEY);
 			else
 				meta::setPending(KEY, {{"version", VERSION}, {"palettes", palettes}});
@@ -60,6 +63,13 @@ namespace ps::replay {
 			lastLoad = now;
 		}
 		g_recorded[side] = {charId, slot, custom};
+		publish();
+	}
+
+	void setSaving(bool on)
+	{
+		std::lock_guard lock(g_mutex);
+		g_saving = on;
 		publish();
 	}
 

@@ -11,7 +11,10 @@
 #include "net.hpp"
 #include "palettefile.hpp"
 #include "picker.hpp"
+#include "replay.hpp"
 #include "replaymeta.hpp"
+#include "saved.hpp"
+#include "iniupgrade.hpp"
 #include "protocol.hpp"
 #include "sha256.hpp"
 
@@ -73,8 +76,26 @@ static void loadConfig(const std::filesystem::path &ini)
 {
 	ps::config.showOpponentPalettes = iniInt(ini, L"Display", L"ShowOpponentPalettes", 1) != 0;
 	ps::config.showOriginalPalettes = iniInt(ini, L"Picker", L"ShowOriginalPalettes", 0) != 0;
+	{
+		auto name = iniString(ini, L"Picker", L"FallbackButton");
+		auto is = [&](const char *s) { return _stricmp(name.c_str(), s) == 0; };
+		using ps::ui::Button;
+		if (name.empty() || is("Switch"))
+			ps::config.fallbackButton = Button::Switch;
+		else if (is("Spell"))
+			ps::config.fallbackButton = Button::Spell;
+		else if (is("D"))
+			ps::config.fallbackButton = Button::D;
+		else if (is("None"))
+			ps::config.fallbackButton = Button::None;
+		else
+			ps::log("config: [Picker] FallbackButton=%s isn't Switch, Spell, D or None, using Switch", name.c_str());
+	}
+	ps::config.autoSaveOpponents = iniInt(ini, L"Save", L"AutoSave", 1) != 0;
+	ps::config.saveReplayPalettes = iniInt(ini, L"Replay", L"SaveMetadata", 1) != 0;
+	ps::replay::setSaving(ps::config.saveReplayPalettes);
 	// A key or modifier taken out of the ini (or left empty) is none: no Key, no hotkey. Without an
-	// ini at all, the defaults (Ctrl+P).
+	// ini at all, the defaults (Ctrl+P to toggle, no save hotkey).
 	std::error_code ec;
 	if (std::filesystem::exists(ini, ec)) {
 		auto vk = [&](const wchar_t *key) {
@@ -87,11 +108,14 @@ static void loadConfig(const std::filesystem::path &ini)
 		};
 		ps::config.toggleModifier = vk(L"Modifier");
 		ps::config.toggleKey = vk(L"Key");
+		ps::config.saveModifier = vk(L"SaveModifier");
+		ps::config.saveKey = vk(L"SaveKey");
 	}
 	ps::config.hotkeyIgnoresFocus = iniInt(ini, L"Debug", L"HotkeyIgnoresFocus", 0) != 0;
-	ps::log("config: ShowOpponentPalettes=%d ShowOriginalPalettes=%d hotkey modifier=0x%02X key=0x%02X%s",
-		ps::config.showOpponentPalettes, ps::config.showOriginalPalettes, ps::config.toggleModifier, ps::config.toggleKey,
-		ps::config.toggleKey ? "" : " (no hotkey)");
+	ps::log("config: ShowOpponentPalettes=%d ShowOriginalPalettes=%d FallbackButton=%d AutoSave=%d SaveMetadata=%d hotkey modifier=0x%02X key=0x%02X%s, save modifier=0x%02X key=0x%02X%s",
+		ps::config.showOpponentPalettes, ps::config.showOriginalPalettes, static_cast<int>(ps::config.fallbackButton), ps::config.autoSaveOpponents, ps::config.saveReplayPalettes,
+		ps::config.toggleModifier, ps::config.toggleKey, ps::config.toggleKey ? "" : " (no hotkey)",
+		ps::config.saveModifier, ps::config.saveKey, ps::config.saveKey ? "" : " (no hotkey)");
 
 	// A palette file, absolute or relative to the mod folder.
 	const wchar_t *keys[2] = {L"ForcePaletteLeft", L"ForcePaletteRight"};
@@ -128,6 +152,8 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 		return false;
 	}
 
+	ps::guarded("ini upgrade", [&] { ps::ini::upgrade(hMyModule, ini); });
+
 	auto library = dir / L"palettes";
 	auto data = gameFolderData();
 	ps::log("library: %ls, backup: %ls", library.c_str(), data.empty() ? L"none (the game folder isn't writable)" : (data / L"backup").c_str());
@@ -136,6 +162,10 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 		ps::backup::start(library, data.empty() ? std::filesystem::path() : data / L"backup");
 	});
 	loadConfig(ini);
+	// Opponents' palettes: next to the backup, also out of reach of SokuLauncher's mod removal.
+	auto savedFolder = (data.empty() ? dir : data) / L"saved";
+	ps::log("opponents' palettes saved to: %ls", savedFolder.c_str());
+	ps::startSaving(savedFolder);
 	ps::installHooks();
 	ps::net::install();
 	ps::picker::install();
@@ -147,6 +177,7 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 extern "C" __declspec(dllexport) void AtExit()
 {
 	ps::net::shutdown();
+	ps::saved::shutdown();
 	ps::log("PaletteShare stopping");
 }
 

@@ -15,10 +15,12 @@
 #include <vector>
 #include "../src/backup.hpp"
 #include "../src/base64.hpp"
+#include "../src/iniupgrade.hpp"
 #include "../src/metaformat.hpp"
 #include "../src/palette.hpp"
 #include "../src/palettefile.hpp"
 #include "../src/protocol.hpp"
+#include "../src/saved.hpp"
 #include "../src/sha256.hpp"
 
 namespace {
@@ -446,6 +448,111 @@ namespace {
 	}
 }
 
+namespace {
+	void testSaved()
+	{
+		namespace fs = std::filesystem;
+		auto folder = g_dir / L"saved";
+		std::error_code ec;
+		fs::remove_all(folder, ec);
+
+		CHECK(saved::cleanName(L"Quosu") == L"Quosu");
+		CHECK(saved::cleanName(L"a/b\\c:d*e?f\"g<h>i|j") == L"a_b_c_d_e_f_g_h_i_j");
+		CHECK(saved::cleanName(L" .name. ") == L"name");
+		CHECK(saved::cleanName(L"") == L"unknown" && saved::cleanName(L"...") == L"unknown");
+		CHECK(saved::cleanName(L"霊夢") == L"霊夢");  // Japanese names stay
+
+		// Profile names: the game's text code page if valid there, else the system's.
+		CHECK(saved::decodeName("\x97\xEC\x96\xB2", 932, 1252) == L"霊夢");  // Shift-JIS, no th123intl
+		CHECK(saved::decodeName("Caf\xE9", 932, 1252) == L"Café");            // not Shift-JIS: Western
+		CHECK(saved::decodeName("\xB2\xE2\xCA\xD4", 936, 936) == L"测试");    // GBK, th123intl in Chinese
+		CHECK(saved::decodeName("Quosu", 936, 1252) == L"Quosu" && saved::decodeName("", 932, 1252).empty());
+
+		auto blue = testPalette(16, 1), green = testPalette(16, 2), red = testPalette(32, 3);
+		auto r = saved::saveNow(folder, L"reimu", L"Quosu", blue);
+		CHECK(r.kind == saved::Result::Saved && r.file == L"reimu-Quosu-01.pal");
+		auto back = readPaletteFile(folder / L"reimu-Quosu-01.pal");
+		CHECK(back && hashPalette(*back) == hashPalette(blue));
+		// The same palette again, also under another case of the name (one file on Windows): not saved twice.
+		r = saved::saveNow(folder, L"reimu", L"quosu", blue);
+		CHECK(r.kind == saved::Result::AlreadySaved && r.file == L"reimu-Quosu-01.pal");
+		// Another palette: the next number; a 32-bit one too.
+		CHECK(saved::saveNow(folder, L"reimu", L"Quosu", green).file == L"reimu-Quosu-02.pal");
+		CHECK(saved::saveNow(folder, L"reimu", L"Quosu", red).file == L"reimu-Quosu-03.pal");
+		back = readPaletteFile(folder / L"reimu-Quosu-03.pal");
+		CHECK(back && hashPalette(*back) == hashPalette(red));
+		// Numbers count per character and player; a player whose name starts like another's is another.
+		CHECK(saved::saveNow(folder, L"marisa", L"Quosu", blue).file == L"marisa-Quosu-01.pal");
+		CHECK(saved::saveNow(folder, L"reimu", L"Quosu-2", blue).file == L"reimu-Quosu-2-01.pal");
+		CHECK(saved::saveNow(folder, L"reimu", L"Quosu", testPalette(16, 4)).file == L"reimu-Quosu-04.pal");
+		// A deleted file's number isn't reused while a higher one exists.
+		fs::remove(folder / L"reimu-Quosu-02.pal");
+		CHECK(saved::saveNow(folder, L"reimu", L"Quosu", green).file == L"reimu-Quosu-05.pal");
+		// Names Windows can't take in a file name.
+		CHECK(saved::saveNow(folder, L"reimu", L"a?b", blue).file == L"reimu-a_b-01.pal");
+		CHECK(saved::saveNow(folder, L"reimu", L"", blue).file == L"reimu-unknown-01.pal");
+		CHECK(saved::saveNow(folder, L"reimu", L"x", Palette{}).kind == saved::Result::Failed);
+		fs::remove_all(folder, ec);
+	}
+
+	void testIniUpgrade()
+	{
+		std::ifstream in(std::filesystem::path(__FILE__).parent_path().parent_path() / L"PaletteShare.ini", std::ios::binary);
+		std::string shipped((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		CHECK(!shipped.empty());
+		// What the upgrade writes for the shipped text: CRLF line ends, one at the end.
+		auto crlf = [](const std::string &s) {
+			std::string out;
+			for (char c : s) {
+				if (c == '\r')
+					continue;
+				if (c == '\n')
+					out += '\r';
+				out += c;
+			}
+			while (out.size() >= 2 && out.compare(out.size() - 2, 2, "\r\n") == 0)
+				out.resize(out.size() - 2);
+			return out + "\r\n";
+		};
+		auto has = [](const std::string &text, const char *part) { return text.find(part) != std::string::npos; };
+
+		CHECK(ini::version("1.1.0") > ini::version("1.0.0") && ini::version("1.0.10") > ini::version("1.0.9"));
+		CHECK(ini::version("") == 0 && ini::version("1.1.0") == ini::version("1.1.0"));
+
+		// A fresh ini upgraded is itself (the parity a rebuild promises).
+		CHECK(ini::upgraded(shipped, shipped, "1.0.0") == crlf(shipped));
+
+		// 1.0.0's ini (no IniVersion) with the player's settings: their values stay, new keys come
+		// with their comments, the save hotkey stays off.
+		std::string old =
+			"; PaletteShare settings\r\n\r\n[Display]\r\n; old comment\r\nShowOpponentPalettes=0\r\n\r\n"
+			"[Picker]\r\nShowOriginalPalettes=1\r\n\r\n[Hotkey]\r\nModifier=0x12\r\nKey=0x4F\r\n\r\n"
+			"[Debug]\r\nLog=0\r\nForcePaletteLeft=blue.pal\r\n\r\n[Replay]\r\nStorage=rep\r\n";
+		auto up = ini::upgraded(shipped, old, "");
+		CHECK(has(up, "IniVersion=" PALETTESHARE_VERSION "\r\n"));
+		CHECK(has(up, "ShowOpponentPalettes=0\r\n") && !has(up, "ShowOpponentPalettes=1"));
+		CHECK(has(up, "ShowOriginalPalettes=1\r\n"));
+		CHECK(has(up, "Modifier=0x12\r\nKey=0x4F\r\n"));
+		CHECK(has(up, "[Save]") && has(up, "\r\nAutoSave=1\r\n"));
+		CHECK(has(up, ";SaveModifier=0x11\r\n;SaveKey=0x53\r\n"));
+		CHECK(has(up, "Log=0\r\n") && has(up, "ForcePaletteLeft=blue.pal\r\n"));
+		CHECK(!has(up, "old comment"));
+		CHECK(has(up, "[Replay]") && has(up, "\r\nSaveMetadata=1\r\n") && !has(up, "Storage"));
+		// Upgrading that again changes nothing.
+		CHECK(ini::upgraded(shipped, up, PALETTESHARE_VERSION) == up);
+
+		// 1.0.0: a hotkey line taken out meant no hotkey, and still does.
+		up = ini::upgraded(shipped, "[Hotkey]\r\nModifier=0x11\r\n", "");
+		CHECK(has(up, "\r\nKey=\r\n") && !has(up, "\r\nKey=0x50"));
+		// The save hotkey turned on and AutoSave off, carried over by a later upgrade.
+		up = ini::upgraded(shipped, "[Save]\r\nAutoSave=0\r\n[Hotkey]\r\nSaveModifier=0x11\r\nSaveKey=0x53\r\n", "1.1.0");
+		CHECK(has(up, "AutoSave=0\r\n"));
+		CHECK(has(ini::upgraded(shipped, "[Replay]\r\nSaveMetadata=0\r\n", "1.1.0"), "\r\nSaveMetadata=0\r\n"));
+		CHECK(has(up, "\r\nSaveModifier=0x11\r\nSaveKey=0x53\r\n") && !has(up, ";SaveKey"));
+		CHECK(has(up, "Key=0x50\r\n"));  // a 1.1.0 ini without Key: the shipped line
+	}
+}
+
 int main()
 {
 	wchar_t temp[MAX_PATH];
@@ -455,7 +562,8 @@ int main()
 
 	struct { const char *name; void (*run)(); } suites[] = {
 		{"sha256", testSha256}, {"base64", testBase64}, {"palettes", testPalettes}, {"protocol", testProtocol},
-		{"replay metadata", testMetaFormat}, {"palette files", testPaletteFiles}, {"backup", testBackup}, {"fuzz", fuzz},
+		{"replay metadata", testMetaFormat}, {"palette files", testPaletteFiles}, {"backup", testBackup},
+		{"saved palettes", testSaved}, {"ini upgrade", testIniUpgrade}, {"fuzz", fuzz},
 	};
 	for (auto &suite : suites) {
 		printf("%s\n", suite.name);

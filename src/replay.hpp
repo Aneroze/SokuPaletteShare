@@ -22,6 +22,8 @@ namespace ps::replay {
 	// atLoad: recorded as the character loads. The first load of a new match (none for 5 s) forgets
 	// the last match's entries first, so a side whose load we don't see can't keep a stale one.
 	void record(int side, int charId, int slot, const std::optional<Palette> &custom, bool atLoad = false);
+	// [Replay] SaveMetadata: off, replays get none of our data (playback still reads it).
+	void setSaving(bool on);
 
 	// The custom palette the replay being watched recorded for this side, if it was recorded for
 	// this character and slot.

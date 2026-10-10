@@ -7,9 +7,11 @@
 #include "picker.hpp"
 #include "original.hpp"
 #include "replay.hpp"
+#include "saved.hpp"
 #include "ui.hpp"
 #include <windows.h>
 #include <SokuLib.hpp>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -61,6 +63,13 @@ namespace ps {
 		bool g_showOpponent = true;
 		unsigned g_seenGeneration = 0;
 		thread_local SokuLib::v2::Player *g_loadingPlayer = nullptr;
+		// Character select: what the opponent's preview shows (their custom palette, checked), for
+		// the save hotkey. Under g_sidesMutex.
+		struct Shown {
+			int charId = -1;
+			std::optional<Palette> custom;
+		};
+		Shown g_selectShown[2];
 
 		void (__fastcall *orig_loadCharacter)(SokuLib::v2::Player *self, void *edx) = nullptr;
 		int *(__fastcall *orig_loadTexture)(void *mgr, void *edx, int *ret, LPCSTR path, void *w, void *h) = nullptr;
@@ -89,6 +98,25 @@ namespace ps {
 		{
 			int local = net::localSide();
 			return local < 0 ? -1 : 1 - local;
+		}
+
+		// A side's profile name in netplay (in game::textCodePage(), as the game has it), "" if none.
+		std::string profileName(int side)
+		{
+			auto net = *reinterpret_cast<SokuLib::NetObject **>(SokuLib::ADDR_PNETOBJECT);
+			if (!net || side < 0 || side > 1)
+				return {};
+			const char *name = side == 0 ? net->profile1name : net->profile2name;
+			return std::string(name, strnlen(name, sizeof(net->profile1name)));
+		}
+
+		// Saves the opponent's custom palette as shown here (see saved.hpp). Not a debug-forced one.
+		void saveOpponent(int side, int charId, const Palette &palette, bool notify)
+		{
+			const char *character = game::characterName(charId);
+			if (side != remoteSide() || config.forcePalette[side] || !character)
+				return;
+			saved::save(character, profileName(side), game::textCodePage(), palette, notify);
 		}
 
 		// Okuu's cloak: the inside (color 31) is magenta in her normal palettes, where the game draws
@@ -309,6 +337,8 @@ namespace ps {
 			}
 			if (side.custom && !watchingReplay())
 				replay::record(index, side.charId, side.slot, side.custom);
+			if (side.custom && config.autoSaveOpponents)
+				saveOpponent(index, side.charId, *side.custom, false);
 			if (side.custom && g_showOpponent) {
 				writeGamePalette(*side.custom, palette);
 				side.showingCustom = true;
@@ -367,10 +397,13 @@ namespace ps {
 
 			if (playerId == local) {
 				net::offerLocal(charId, slot, current, hashPalette(current));
-			} else if (g_showOpponent) {
-				if (auto custom = customFor(playerId, charId, slot, current, true))
-					writeGamePalette(*custom, palette);
+				return;
 			}
+			auto custom = customFor(playerId, charId, slot, current, true);
+			if (custom && g_showOpponent)
+				writeGamePalette(*custom, palette);
+			std::lock_guard lock(g_sidesMutex);
+			g_selectShown[playerId] = Shown{charId, std::move(custom)};
 		}
 
 		void pickUpLatePalette(int index);
@@ -411,6 +444,8 @@ namespace ps {
 			bool show = custom && g_showOpponent;
 			if (show || side.showingCustom)
 				startRebuild(index, show ? *custom : side.vanilla, show);
+			if (custom && config.autoSaveOpponents)
+				saveOpponent(index, side.charId, *custom, false);
 			side.custom = std::move(custom);
 		}
 
@@ -427,12 +462,13 @@ namespace ps {
 						for (int i = 0; i < 2; i++)
 							showSide(i, g_showOpponent);
 					}
+					pollSaveHotkey(false);
 					pickUpLatePalettes();
 					std::lock_guard lock(g_sidesMutex);
 					stepRebuilds();
 				});
 				int ret = orig(self);
-				guarded("battle drawing", drawToggleNotice);
+				guarded("battle drawing", drawNotice);
 				return ret;
 			}
 		};
@@ -475,35 +511,101 @@ namespace ps {
 			}
 		}
 
-		DWORD g_noticeUntil = 0;  // Ctrl+P feedback on screen until then
+		// Hotkey feedback, on screen until g_noticeUntil (set from the save writer's thread too).
+		std::mutex g_noticeMutex;
+		std::string g_notice[2];  // second line optional
+		DWORD g_noticeUntil = 0;
+
+		void notify(const std::string &line1, const std::string &line2 = {})
+		{
+			std::lock_guard lock(g_noticeMutex);
+			g_notice[0] = line1;
+			g_notice[1] = line2;
+			g_noticeUntil = GetTickCount() + 2000;
+		}
+
+		// A hotkey (virtual-key codes, modifier 0 = key alone, key 0 = none) pressed this frame.
+		struct Hotkey {
+			bool wasDown = false;
+
+			bool pressed(int modifier, int key)
+			{
+				if (!key)
+					return false;
+				bool down = (config.hotkeyIgnoresFocus || GetForegroundWindow() == SokuLib::window) &&
+				            (GetAsyncKeyState(key) & 0x8000) &&
+				            (!modifier || (GetAsyncKeyState(modifier) & 0x8000));
+				bool pressed = down && !wasDown;
+				wasDown = down;
+				return pressed;
+			}
+		};
 	}
 
-	void drawToggleNotice()
+	void drawNotice()
 	{
-		if (static_cast<int>(g_noticeUntil - GetTickCount()) <= 0)
-			return;
+		std::string lines[2];
+		{
+			std::lock_guard lock(g_noticeMutex);
+			if (static_cast<int>(g_noticeUntil - GetTickCount()) <= 0)
+				return;
+			lines[0] = g_notice[0];
+			lines[1] = g_notice[1];
+		}
 		static ui::Text &text = *new ui::Text(14);  // never destroyed (see picker.cpp)
-		ui::drawBox(232, 92, 176, 22, 0xC0000000, 0xC0B0B0B0);
-		text.draw(g_showOpponent ? "Opponent palettes: ON" : "Opponent palettes: OFF", 244, 95);
+		if (lines[1].empty()) {
+			ui::drawBox(232, 92, 176, 22, 0xC0000000, 0xC0B0B0B0);
+			text.draw(lines[0], 244, 95);
+		} else {
+			ui::drawBox(162, 92, 316, 40, 0xC0000000, 0xC0B0B0B0);
+			text.draw(lines[0], 170, 95);
+			text.draw(lines[1], 170, 112);
+		}
 	}
 
 	bool pollOpponentToggle()
 	{
-		static bool wasDown = false;
-		if (!config.toggleKey)
-			return false;  // no hotkey set
-		bool down = (config.hotkeyIgnoresFocus || GetForegroundWindow() == SokuLib::window) &&
-		            (GetAsyncKeyState(config.toggleKey) & 0x8000) &&
-		            (!config.toggleModifier || (GetAsyncKeyState(config.toggleModifier) & 0x8000));
-		bool pressed = down && !wasDown;
-		wasDown = down;
-		if (!pressed)
+		static Hotkey hotkey;
+		if (!hotkey.pressed(config.toggleModifier, config.toggleKey))
 			return false;
 		g_showOpponent = !g_showOpponent;
-		g_noticeUntil = GetTickCount() + 2000;
+		notify(g_showOpponent ? "Opponent palettes: ON" : "Opponent palettes: OFF");
 		log("hotkey: opponent custom palettes %s", g_showOpponent ? "ON" : "OFF");
 		SokuLib::playSEWaveBuffer(g_showOpponent ? game::SE_OK : game::SE_BACK);
 		return true;
+	}
+
+	void pollSaveHotkey(bool select)
+	{
+		static Hotkey hotkey;
+		if (!hotkey.pressed(config.saveModifier, config.saveKey))
+			return;
+		int side = remoteSide();
+		Shown shown;
+		if (side >= 0) {
+			std::lock_guard lock(g_sidesMutex);
+			shown = select ? g_selectShown[side] : Shown{g_sides[side].charId, g_sides[side].custom};
+		}
+		if (side < 0 || !shown.custom || config.forcePalette[side]) {
+			log("hotkey: no opponent custom palette to save");
+			notify(side < 0 ? "No opponent online" : "No custom palette to save");
+			SokuLib::playSEWaveBuffer(game::SE_BACK);
+			return;
+		}
+		log("hotkey: saving the opponent's palette (char=%d)", shown.charId);
+		saveOpponent(side, shown.charId, *shown.custom, true);
+		SokuLib::playSEWaveBuffer(game::SE_OK);
+	}
+
+	void startSaving(const std::filesystem::path &folder)
+	{
+		saved::start(folder, [](const saved::Result &result) {
+			switch (result.kind) {
+			case saved::Result::Saved: notify("Opponent palette saved as", ui::narrow(result.file)); break;
+			case saved::Result::AlreadySaved: notify("Already saved as", ui::narrow(result.file)); break;
+			case saved::Result::Failed: notify("Could not save the palette", "(see PaletteShare.log)"); break;
+			}
+		});
 	}
 
 	void installHooks()

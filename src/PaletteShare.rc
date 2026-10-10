@@ -1,0 +1,3 @@
+// The shipped PaletteShare.ini, embedded as the template the ini upgrade rebuilds older inis from
+// (iniupgrade.hpp). Found through the include path (the project root, see CMakeLists.txt).
+PS_DEFAULT_INI RCDATA "PaletteShare.ini"

@@ -27,4 +27,10 @@ namespace ps::game {
 	// palette-picker owns the palette step (and the same key in the deck screen) when it's loaded.
 	// Checked on first use, once every mod is loaded (it may load after us).
 	bool palettePickerLoaded();
+
+	// The code page the game decodes text in: Shift-JIS (932), or the one th123intl (a translation
+	// mod) switches the game to, which it tells other mods with its GetTextCodePage export (936 in
+	// Chinese, 1252 in English). Text drawn through the game must be in it, and profile names are
+	// in it as far as this player's game is concerned. Checked on first use, once every mod is loaded.
+	UINT textCodePage();
 }
