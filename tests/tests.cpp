@@ -22,6 +22,7 @@
 #include "../src/protocol.hpp"
 #include "../src/saved.hpp"
 #include "../src/sha256.hpp"
+#include "../src/sitereport.hpp"
 
 namespace {
 	int g_failed = 0, g_checks = 0;
@@ -538,6 +539,7 @@ namespace {
 		CHECK(has(up, "Log=0\r\n") && has(up, "ForcePaletteLeft=blue.pal\r\n"));
 		CHECK(!has(up, "old comment"));
 		CHECK(has(up, "[Replay]") && has(up, "\r\nSaveMetadata=1\r\n") && !has(up, "Storage"));
+		CHECK(has(up, "[Site]") && has(up, "\r\nUpload=1\r\n") && has(up, "\r\n;Url=https://") && !has(up, "Token"));  // the new [Site] section
 		// Upgrading that again changes nothing.
 		CHECK(ini::upgraded(shipped, up, PALETTESHARE_VERSION) == up);
 
@@ -553,6 +555,21 @@ namespace {
 	}
 }
 
+namespace {
+	void testSiteReport()
+	{
+		// The replay sidecar value, embedded as it is, with the seed and the reporter's side.
+		nlohmann::json value = {{"version", 1}, {"palettes", {{"p2", {{"character", 15}, {"slot", 0}, {"palette", "EAAH"}}}}}};
+		auto j = nlohmann::json::parse(site::body(3735928559u, "p1", value));
+		CHECK(j.size() == 3 && j["seed"] == 3735928559u && j["reporter"] == "p1" && j["PaletteShare"] == value);
+		CHECK(nlohmann::json::parse(site::body(0, "spectator", value))["reporter"] == "spectator");
+		// No palettes (or no value): nothing to report.
+		value["palettes"] = nlohmann::json::object();
+		CHECK(site::body(1, "p2", value).empty());
+		CHECK(site::body(1, "p2", nlohmann::json::object()).empty());
+	}
+}
+
 int main()
 {
 	wchar_t temp[MAX_PATH];
@@ -563,7 +580,7 @@ int main()
 	struct { const char *name; void (*run)(); } suites[] = {
 		{"sha256", testSha256}, {"base64", testBase64}, {"palettes", testPalettes}, {"protocol", testProtocol},
 		{"replay metadata", testMetaFormat}, {"palette files", testPaletteFiles}, {"backup", testBackup},
-		{"saved palettes", testSaved}, {"ini upgrade", testIniUpgrade}, {"fuzz", fuzz},
+		{"saved palettes", testSaved}, {"ini upgrade", testIniUpgrade}, {"site report", testSiteReport}, {"fuzz", fuzz},
 	};
 	for (auto &suite : suites) {
 		printf("%s\n", suite.name);

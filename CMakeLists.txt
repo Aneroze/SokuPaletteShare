@@ -65,6 +65,8 @@ add_library(PaletteShare MODULE
 	src/saved.cpp
 	src/iniupgrade.hpp
 	src/iniupgrade.cpp
+	src/sitereport.hpp
+	src/sitereport.cpp
 	src/PaletteShare.rc
 )
 target_compile_definitions(PaletteShare PRIVATE
@@ -80,7 +82,7 @@ if(NOT _ps_ini_version STREQUAL "IniVersion=${PROJECT_VERSION}")
 	message(WARNING "PaletteShare.ini has '${_ps_ini_version}', expected 'IniVersion=${PROJECT_VERSION}'")
 endif()
 target_compile_options(PaletteShare PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W3 /utf-8>)
-target_link_libraries(PaletteShare PRIVATE SokuLib shlwapi ws2_32 shell32)
+target_link_libraries(PaletteShare PRIVATE SokuLib shlwapi ws2_32 shell32 winhttp)
 set_target_properties(PaletteShare PROPERTIES PREFIX "")
 
 # Tests for the parts that don't need the game (tools\test.bat builds and runs them).

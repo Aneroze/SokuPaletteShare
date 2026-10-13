@@ -17,6 +17,7 @@
 #include "iniupgrade.hpp"
 #include "protocol.hpp"
 #include "sha256.hpp"
+#include "sitereport.hpp"
 
 // th123.exe 1.10a
 static const BYTE TARGET_HASH[16] = {0xdf, 0x35, 0xd1, 0xfb, 0xc7, 0xb5, 0x83, 0x31, 0x7a, 0xda, 0xbe, 0x8c, 0xd9, 0xf5, 0x3b, 0x2e};
@@ -166,6 +167,11 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE)
 	auto savedFolder = (data.empty() ? dir : data) / L"saved";
 	ps::log("opponents' palettes saved to: %ls", savedFolder.c_str());
 	ps::startSaving(savedFolder);
+	{
+		wchar_t url[1024];
+		GetPrivateProfileStringW(L"Site", L"Url", L"", url, ARRAYSIZE(url), ini.c_str());
+		ps::site::start(iniInt(ini, L"Site", L"Upload", 1) != 0, url);
+	}
 	ps::installHooks();
 	ps::net::install();
 	ps::picker::install();
@@ -178,6 +184,7 @@ extern "C" __declspec(dllexport) void AtExit()
 {
 	ps::net::shutdown();
 	ps::saved::shutdown();
+	ps::site::shutdown();
 	ps::log("PaletteShare stopping");
 }
 

@@ -86,6 +86,14 @@ With `[Save] AutoSave=0` nothing is saved by itself; set the save hotkey (`SaveM
 under `[Hotkey]`, shipped off; uncomment both for Ctrl+S) to save the opponent's palette when you
 want, at character select or in the match.
 
+## The site (soku.cleista.cc)
+
+Online (as a player or a spectator), PaletteShare tells [soku.cleista.cc](https://soku.cleista.cc)
+which custom palettes a match shows, so the site's live rooms and replays show them too: the game's
+random seed, both characters and palette slots, and the custom palettes shown, the same data it
+writes into replay sidecars. No names or other personal data. Nothing is sent offline, in replays or
+when no side has a custom palette. `[Site] Upload=0` turns it off.
+
 ## Settings (`PaletteShare.ini`)
 
 | Setting | |
@@ -97,12 +105,15 @@ want, at character select or in the match.
 | `[Save] AutoSave=0` | don't save opponents' palettes by themselves |
 | `[Replay] SaveMetadata=0` | don't save custom palettes with replays (no `.meta.json`; they play back with the normal palettes) |
 | `[Hotkey] SaveModifier`, `SaveKey` | save the opponent's palette now (default none; the shipped ini has Ctrl+S commented out) |
+| `[Site] Upload=0` | don't tell soku.cleista.cc about online matches' custom palettes (see above) |
 | `[Debug] Log=1` | `PaletteShare.log` (max 2 MB; previous run in `PaletteShare.prev.log`). Includes opponents' IP addresses. Send both logs with bug reports. |
 
 Testing only, under `[Debug]`:
 - `ForcePaletteLeft=<file>` / `ForcePaletteRight=<file>` show a palette file (absolute, or relative
   to the mod folder) on that side, as if the opponent had sent it, also offline.
 - `HotkeyIgnoresFocus=1` lets the hotkeys work without the game focused.
+
+Testing only, under `[Site]`: `Url=` sends the reports elsewhere (e.g. a local test server).
 
 `IniVersion` records the version that last wrote the ini. When you update the mod, an older ini is
 rebuilt from the new one with your settings kept, so new settings show up with their comments.
