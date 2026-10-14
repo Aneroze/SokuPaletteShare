@@ -552,6 +552,10 @@ namespace {
 		CHECK(has(ini::upgraded(shipped, "[Replay]\r\nSaveMetadata=0\r\n", "1.1.0"), "\r\nSaveMetadata=0\r\n"));
 		CHECK(has(up, "\r\nSaveModifier=0x11\r\nSaveKey=0x53\r\n") && !has(up, ";SaveKey"));
 		CHECK(has(up, "Key=0x50\r\n"));  // a 1.1.0 ini without Key: the shipped line
+		// 1.1.0 had no [Site]: the upgrade adds it, on; Upload=0 set by hand later is kept.
+		up = ini::upgraded(shipped, "[Replay]\r\nSaveMetadata=0\r\n", "1.1.0");
+		CHECK(has(up, "[Site]") && has(up, "\r\nUpload=1\r\n") && has(up, "\r\nSaveMetadata=0\r\n"));
+		CHECK(has(ini::upgraded(shipped, "[Site]\r\nUpload=0\r\n", "1.1.0"), "\r\nUpload=0\r\n"));
 	}
 }
 
