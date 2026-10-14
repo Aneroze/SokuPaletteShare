@@ -28,8 +28,13 @@ namespace ps::site {
 			wchar_t host[256], path[2048];
 			url.lpszHostName = host, url.dwHostNameLength = ARRAYSIZE(host);
 			url.lpszUrlPath = path, url.dwUrlPathLength = ARRAYSIZE(path);
-			if (!WinHttpCrackUrl(g_url.c_str(), 0, 0, &url))
+			if (!WinHttpCrackUrl(g_url.c_str(), 0, 0, &url)) {
+				static bool told = false;  // once a session: every report would fail the same way
+				if (!told)
+					log("site: can't use the address %ls (error %lu), nothing will be sent", g_url.c_str(), GetLastError());
+				told = true;
 				return 0;
+			}
 			std::string version = PALETTESHARE_VERSION;
 			DWORD status = 0, size = sizeof(status);
 			HINTERNET session = WinHttpOpen((L"PaletteShare/" + std::wstring(version.begin(), version.end())).c_str(), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
@@ -68,7 +73,8 @@ namespace ps::site {
 					body = g_sent = std::move(g_pending);
 					g_pending.clear();
 				}
-				log("site: report sent, HTTP %lu", post(body));
+				if (DWORD status = post(body))
+					log("site: report sent, HTTP %lu", status);
 			}
 		}
 	}
@@ -95,14 +101,13 @@ namespace ps::site {
 	{
 		if (!g_thread)
 			return;
-		// Online only: a player in netplay, or spectating (the watch scenes; replays play in others).
+		// Playing online only: spectators and replays report nothing, the players report themselves.
 		int side = net::localSide();
-		bool watching = SokuLib::sceneId == SokuLib::SCENE_LOADINGWATCH || SokuLib::sceneId == SokuLib::SCENE_BATTLEWATCH;
-		if (side < 0 && !watching)
+		if (side < 0)
 			return;
-		auto text = body(SokuLib::gameParams.randomSeed, side == 0 ? "p1" : side == 1 ? "p2" : "spectator", value);
+		auto text = body(SokuLib::gameParams.randomSeed, side, value);
 		std::lock_guard lock(g_mutex);
-		g_pending = std::move(text);  // empty (no palettes now): nothing pending
+		g_pending = std::move(text);  // empty (no palette on our side now): nothing pending
 		g_pendingAt = GetTickCount64();
 	}
 }

@@ -88,11 +88,13 @@ want, at character select or in the match.
 
 ## The site (soku.cleista.cc)
 
-Online (as a player or a spectator), PaletteShare tells [soku.cleista.cc](https://soku.cleista.cc)
-which custom palettes a match shows, so the site's live rooms and replays show them too: the game's
-random seed, both characters and palette slots, and the custom palettes shown, the same data it
-writes into replay sidecars. No names or other personal data. Nothing is sent offline, in replays or
-when no side has a custom palette. `[Site] Upload=0` turns it off.
+When you play online, PaletteShare tells [soku.cleista.cc](https://soku.cleista.cc) which palette
+you show, so the site's live rooms and replays show it too: the game's random seed, your character
+and palette slot, and your palette if it isn't the game's own (the same data it writes into replay
+sidecars). Only your own side: your opponent's palette is theirs to send, so a player without
+PaletteShare, or with `[Site] Upload=0`, never appears. Nothing is sent offline, while spectating, in
+replays or when you show the game's own palette. Like any website, the site sees your IP address,
+and since it also lists the match, it can tell which player you are. `[Site] Upload=0` turns it off.
 
 ## Settings (`PaletteShare.ini`)
 
@@ -105,7 +107,7 @@ when no side has a custom palette. `[Site] Upload=0` turns it off.
 | `[Save] AutoSave=0` | don't save opponents' palettes by themselves |
 | `[Replay] SaveMetadata=0` | don't save custom palettes with replays (no `.meta.json`; they play back with the normal palettes) |
 | `[Hotkey] SaveModifier`, `SaveKey` | save the opponent's palette now (default none; the shipped ini has Ctrl+S commented out) |
-| `[Site] Upload=0` | don't tell soku.cleista.cc about online matches' custom palettes (see above) |
+| `[Site] Upload=0` | don't tell soku.cleista.cc which palette you show online (see above) |
 | `[Debug] Log=1` | `PaletteShare.log` (max 2 MB; previous run in `PaletteShare.prev.log`). Includes opponents' IP addresses. Send both logs with bug reports. |
 
 Testing only, under `[Debug]`:

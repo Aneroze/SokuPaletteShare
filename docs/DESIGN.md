@@ -152,14 +152,16 @@ is Down (case-insensitive token); a real D is `nav =d 10`.
 ## Site reports (`src/sitereport.cpp`)
 
 soku.cleista.cc records matches as a spectator, often through relays without the mod, so it can't
-take palettes from our UDP protocol; each modded game tells it instead. `replay.cpp`'s `publish()`
-hands every new sidecar value to `site::offer` (whatever `[Replay] SaveMetadata` says). Online only
-(`net::localSide()` 0/1, or the watch scenes), a value with palettes is sent 1.5 s after the last
-change (both sides have loaded by then), once per seed and value (again for a late palette):
+take palettes from our UDP protocol; each modded game tells it instead. Each player reports only
+their own side, so a palette reaches the site only from its owner's game, with their `Upload` on;
+spectators and replays report nothing. `replay.cpp`'s `publish()` hands every new sidecar value to
+`site::offer` (whatever `[Replay] SaveMetadata` says). Playing online only (`net::localSide()` 0/1),
+our side's entry is sent 1.5 s after the last change, once per seed and entry (the opponent's
+palette arriving later changes nothing):
 `POST <[Site] Url>` (default `https://soku.cleista.cc/api/v1/palette-share`)
-`{"seed": <gameParams.randomSeed, 0x899D50>, "reporter": "p1" | "p2" | "spectator", "PaletteShare": <the sidecar value>}`.
-One WinHTTP attempt on a background thread, 5 s timeouts, failures only logged. `[Site] Upload=0`:
-no thread, nothing sent.
+`{"seed": <gameParams.randomSeed, 0x899D50>, "reporter": "p1" | "p2", "PaletteShare": {"version": 1, "palettes": {<our side>: <its sidecar entry>}}}`.
+One WinHTTP attempt on a background thread, 5 s timeouts, failures only logged (an unusable
+`Url` once). `[Site] Upload=0`: no thread, nothing sent.
 
 ## Anti-abuse
 
