@@ -6,6 +6,7 @@
 #include "library.hpp"
 #include "log.hpp"
 #include "net.hpp"
+#include "selectguard.hpp"
 #include "ui.hpp"
 #include <windows.h>
 #include <SokuLib.hpp>
@@ -85,6 +86,8 @@ namespace ps::picker {
 			bool confirmed = false;
 			int confirmedChar = -1;
 			std::optional<Palette> confirmedCustom;
+			// The game confirmed without us: rebuild the preview with what it confirmed.
+			bool previewAfterConfirm = false;
 
 			int count() const { return 8 + static_cast<int>(lib.palettes.size()); }
 			// The entry's palette with a fallback of its own (library or replaced slot), or null.
@@ -153,6 +156,8 @@ namespace ps::picker {
 
 		std::mutex g_mutex;  // customFor() is called from the loader thread
 		Pick g_picks[2];
+		// Online: our presses that change the select stage and haven't been applied yet (selectguard.hpp).
+		SelectGuard g_guards[2];
 		bool disabled() { return game::palettePickerLoaded(); }
 
 		void (__fastcall *orig_setInputs)(void *mgr, void *edx) = nullptr;
@@ -369,19 +374,74 @@ namespace ps::picker {
 			}
 		}
 
+		// The palette step ended with a confirm that wasn't ours (the guard should prevent it; this
+		// keeps what we load and show true to what the game picked, whatever got through).
+		void confirmedByGame(Pick &pick, int side, int wheel)
+		{
+			if (pick.confirmed && pick.confirmSent >= 0)
+				return;  // ours
+			auto custom = pick.custom();
+			bool keep = custom && wheel == pick.target();  // the wheel was where the picker wanted it
+			pick.confirmed = true;
+			pick.confirmedChar = pick.charId;
+			pick.confirmedCustom = keep ? std::optional<Palette>(custom->palette) : std::nullopt;
+			pick.previewAfterConfirm = true;
+			log("picker: the game confirmed side=%d char=%d without the picker: game slot %d, highlighted %d (%ls), %s", side, pick.charId,
+				wheel, pick.index, custom ? displayName(*custom).c_str() : L"vanilla", keep ? "custom palette kept" : "loading the game slot");
+		}
+
+		void logGuard(SelectGuard::Event e, int side, const SelectGuard &guard)
+		{
+			switch (e) {
+			case SelectGuard::Event::Queued:
+				log("picker: side=%d pressed during the netplay delay, held back for the palette step (confirm %d%s, moves %+d)", side,
+					(int)guard.queued().confirm, guard.queued().confirmWithD ? " D" : "", guard.queued().moves);
+				break;
+			case SelectGuard::Event::Sent: log("picker: side=%d character confirm on its way, holding confirms back until the palette step", side); break;
+			case SelectGuard::Event::Cancelled: log("picker: side=%d went back during the netplay delay, nothing held back", side); break;
+			case SelectGuard::Event::TimedOut: log("picker: side=%d a select press was never applied, guard released", side); break;
+			default: break;
+			}
+		}
+
 		// One side's palette step, with the keys the game just decoded from that side's keymap.
 		// Returns whether it drove the step.
 		bool driveSide(SokuLib::Select *sel, int side, SokuLib::KeymapManager *mgr)
 		{
 			auto &pick = g_picks[side];
+			auto &guard = g_guards[side];
 			int stage = stageOf(sel, side);
 			int charId = characterOf(sel, side);
 			int wheel = wheelOf(sel, side).pos;
+			auto &in = *reinterpret_cast<SokuLib::KeyInput *>(reinterpret_cast<char *>(mgr) + KEYINPUT_OFFSET);
+			auto &bits = *reinterpret_cast<uint16_t *>(reinterpret_cast<char *>(mgr) + OUTKEYS_OFFSET);
+			GuardKeys keys{in.verticalAxis, in.a, in.b, in.d, bits};
+			const bool dConfirms = config.fallbackButton != ui::Button::D;
+			// Online our keys act only after the netplay delay (selectguard.hpp); offline right away.
+			const bool delayed = online();
+			if (delayed)
+				logGuard(guard.observe(stage), side, guard);
 
 			if (stage != STAGE_PALETTE || charId < 0) {
+				if (pick.active && stage > STAGE_PALETTE)
+					confirmedByGame(pick, side, wheel);
 				if (pick.active && stage < STAGE_PALETTE)
 					pick.confirmed = false;  // went back to character choice
 				pick.active = false;
+				if (delayed && !submenuOpen()) {
+					if (stage == STAGE_PALETTE && !guard.inFlight()) {
+						// A character the picker doesn't handle: a confirm held back goes to the game as it is.
+						auto q = guard.take();
+						guard.suppressHeld(keys, true);
+						if (q.confirm) {
+							in.a = !q.confirmWithD;
+							in.d = q.confirmWithD;
+							bits |= q.confirmWithD ? SelectGuard::BIT_D : SelectGuard::BIT_A;
+						}
+					} else {
+						logGuard(guard.filter(keys, stage, menuMove(in.verticalAxis), dConfirms, charId >= 0), side, guard);
+					}
+				}
 				return false;
 			}
 			bool starting = !pick.active || pick.charId != charId;
@@ -405,8 +465,33 @@ namespace ps::picker {
 				reloadPick(pick);
 			}
 
-			auto &in = *reinterpret_cast<SokuLib::KeyInput *>(reinterpret_cast<char *>(mgr) + KEYINPUT_OFFSET);
-			auto &bits = *reinterpret_cast<uint16_t *>(reinterpret_cast<char *>(mgr) + OUTKEYS_OFFSET);
+			if (delayed) {
+				if (guard.inFlight()) {
+					// Presses of ours are still on their way (B back to the character step, maybe an A
+					// again): the picker sends nothing, the keys go to the game as they are.
+					pick.steer = Steer::Idle;
+					pick.pendingConfirm = false;
+					logGuard(guard.filter(keys, stage, menuMove(in.verticalAxis), dConfirms, true), side, guard);
+					return true;
+				}
+				if (auto q = guard.take(); q.any()) {
+					// Pressed before the palette step arrived: the picker takes them from here.
+					for (int n = 0; n < (q.moves < 0 ? -q.moves : q.moves); n++)
+						pick.index = pick.step(pick.index, q.moves < 0 ? -1 : 1);
+					if (q.moves) {
+						pick.previewDirty = true;
+						moveSound();
+					}
+					if (q.confirm) {
+						pick.pendingConfirm = true;
+						pick.confirmWithD = q.confirmWithD;
+						pick.confirmRetries = 0;
+					}
+					log("picker: side=%d palette step arrived with %+d move(s)%s held back, now at %d", side, q.moves,
+						q.confirm ? (q.confirmWithD ? " and a confirm (D)" : " and a confirm") : "", pick.index);
+				}
+				guard.suppressHeld(keys, false);
+			}
 
 			// Confirm sent, the game hasn't applied it yet: keep everything still (B, the deck keys
 			// and C still reach the game).
@@ -445,9 +530,16 @@ namespace ps::picker {
 					pick.unreachable = -1;
 					pick.confirmed = false;
 				}
+				// Online, B goes back to the character step only after the netplay delay: until then the
+				// picker sends nothing, or its presses would act on the character step.
+				if (delayed && in.b == 1) {
+					guard.backSent();
+					pick.steer = Steer::Idle;
+					pick.pendingConfirm = false;
+					return true;
+				}
 				// A confirms; so does D, with the game's random deck. Either is sent on once the wheel
 				// is on the slot to confirm.
-				const bool dConfirms = config.fallbackButton != ui::Button::D;
 				if (in.a == 1 || (dConfirms && in.d == 1)) {
 					pick.pendingConfirm = true;
 					pick.confirmWithD = in.a != 1;
@@ -551,9 +643,12 @@ namespace ps::picker {
 			if (!sel) {
 				for (auto &p : g_picks) {
 					p.active = false;
+					p.previewAfterConfirm = false;
 					if (SokuLib::sceneId == SokuLib::SCENE_TITLE)
 						p.confirmed = false;  // a pick never outlives its session
 				}
+				for (auto &g : g_guards)
+					g = SelectGuard{};
 				return;
 			}
 			// One side per keymap and frame: in Practice player 1 picks both sides, one after the other.
@@ -780,7 +875,8 @@ namespace ps::picker {
 			for (int side = 0; side < 2; side++) {
 				std::unique_lock lock(g_mutex);
 				auto &pick = g_picks[side];
-				if (pick.active && pick.previewDirty) {
+				if ((pick.active && pick.previewDirty) || pick.previewAfterConfirm) {
+					pick.previewAfterConfirm = false;
 					lock.unlock();  // the rebuild calls back into our preview hook
 					refreshPreview(sel, side, pick);
 				}

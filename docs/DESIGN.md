@@ -293,6 +293,24 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
   2026-10-02: mirror rule (the game's: skip the other side's slot and palette, bump a taken
   fallback for that match), fallback previews from the original `.dat` archives, both sides offline
   and gamepads, netplay re-verified. Soku2/modded characters: deferred indefinitely (user).
+  2026-10-15, double press online (a user's log: Black Reimu highlighted, slot 0 confirmed, no
+  `picker: confirmed`; a Reisen custom palette dropped the same way): select inputs act only after
+  the netplay delay, and the picker drives from the stage the game has applied. A, A within the
+  delay let the second A through at the character step; the game applied it at the palette step
+  and confirmed the wheel wherever it was. `SelectGuard` (src/selectguard.hpp, unit-tested) follows
+  our presses that change the stage (stage handlers `0x4207A0` / `0x42064A`: A at the character step
+  goes to stage 1, B at the palette step back to 0; D at the character step is the random character,
+  stage 3): while one leading to the palette step is on its way, A/D and Up/Down are held back (until
+  released) and queued for the picker; while one leading back is on its way, the picker sends
+  nothing (its steering would move the character cursor) and keys pass. Given up after 90 frames
+  without a stage change. Safety net: the palette step ending without our confirm logs `the game
+  confirmed ... without the picker`, keeps the custom palette only if the wheel was on its slot,
+  and rebuilds the preview. Online only; offline the game applies keys in the same frame.
+  Verified with a 100 ms relay (host with the mod, client without): before, `a 1 a` confirmed slot 0
+  (.rep byte 0x0F = 00) and dropped a Reisen custom; after, 3/3 each confirm slot 1 / keep the
+  custom, plus Down and D in the delay, B in the delay, the client side, a custom with steering and
+  a rematch. At 200 ms the game itself drops about 1 in 8 short presses (with or without the mod);
+  8 double presses: before 3 bypasses, after 7 picks through the picker (the 8th lost by the game).
 
 ## Open questions
 

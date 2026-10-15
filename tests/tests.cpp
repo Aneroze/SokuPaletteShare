@@ -1,5 +1,6 @@
 // Tests for the parts of PaletteShare that don't need the game: hashing, base64, palettes, the
-// network protocol, the replay metadata format and the palette file readers, plus a fuzz pass that
+// network protocol, the replay metadata format, the palette file readers and the picker's netplay
+// select guard, plus a fuzz pass that
 // feeds mutated inputs to every parser (they must reject or accept, never crash or throw).
 //
 //   tools\test.bat        (builds the PaletteShareTests target and runs it)
@@ -21,6 +22,7 @@
 #include "../src/palettefile.hpp"
 #include "../src/protocol.hpp"
 #include "../src/saved.hpp"
+#include "../src/selectguard.hpp"
 #include "../src/sha256.hpp"
 #include "../src/sitereport.hpp"
 
@@ -496,6 +498,186 @@ namespace {
 		fs::remove_all(folder, ec);
 	}
 
+	// One frame of keys as the game decodes them: counters count held frames, bits follow them.
+	struct Frame {
+		int v = 0, a = 0, b = 0, d = 0;
+		uint16_t bits = 0;
+		picker::GuardKeys keys() { return {v, a, b, d, bits}; }
+	};
+
+	// A key held for `held` frames (0 = up), with its netcode bits.
+	Frame frame(int a, int b = 0, int d = 0, int v = 0)
+	{
+		Frame f;
+		f.a = a;
+		f.b = b;
+		f.d = d;
+		f.v = v;
+		f.bits = static_cast<uint16_t>((a ? 16 : 0) | (b ? 32 : 0) | (d ? 128 : 0) | (v < 0 ? 1 : 0) | (v > 0 ? 2 : 0));
+		return f;
+	}
+
+	// The character step, as picker.cpp feeds it: observe, then filter (stage 0 or a palette step
+	// with presses on the way).
+	picker::SelectGuard::Event step(picker::SelectGuard &g, Frame &f, int stage, int move = 0, bool dConfirms = true)
+	{
+		g.observe(stage);
+		return g.filter(f.keys(), stage, move, dConfirms, true);
+	}
+
+	void testSelectGuard()
+	{
+		using G = picker::SelectGuard;
+		{  // a single A: passes, then the palette step arrives with nothing queued
+			G g;
+			Frame f = frame(1);
+			CHECK(step(g, f, 0) == G::Event::Sent && f.a == 1 && f.bits == 16);
+			CHECK(g.inFlight());
+			for (int n = 2; n < 5; n++) {  // still held: the same press, untouched
+				f = frame(n);
+				step(g, f, 0);
+				CHECK(f.a == n && f.bits == 16);
+			}
+			g.observe(1);
+			CHECK(!g.inFlight() && !g.take().any());
+		}
+		{  // the reported bug: A, A within the delay. The second is held back (until released) and queued
+			G g;
+			Frame f = frame(1);
+			step(g, f, 0);
+			f = frame(0);
+			step(g, f, 0);
+			f = frame(1);
+			CHECK(step(g, f, 0) == G::Event::Queued && f.a == 0 && f.bits == 0);
+			CHECK(g.queued().confirm && !g.queued().confirmWithD);
+			f = frame(2);
+			step(g, f, 0);
+			CHECK(f.a == 0 && f.bits == 0);
+			g.observe(1);  // the palette step arrives while A is still held
+			CHECK(!g.inFlight());
+			auto q = g.take();
+			CHECK(q.confirm && !q.confirmWithD && q.moves == 0 && !g.take().any());
+			f = frame(3);
+			g.suppressHeld(f.keys(), false);
+			CHECK(f.a == 0 && f.bits == 0);  // a held key let through would be a new press online
+			f = frame(0);
+			g.suppressHeld(f.keys(), false);
+			f = frame(1);
+			g.suppressHeld(f.keys(), false);
+			CHECK(f.a == 1 && f.bits == 16);  // released once: a new press is the player's again
+		}
+		{  // D confirms with the random deck; with D as the fallback button it doesn't, but is still held back
+			G g;
+			Frame f = frame(1);
+			step(g, f, 0);
+			f = frame(0, 0, 1);
+			CHECK(step(g, f, 0) == G::Event::Queued && f.d == 0 && f.bits == 0);
+			CHECK(g.queued().confirm && g.queued().confirmWithD);
+			G h;
+			f = frame(1);
+			step(h, f, 0, 0, false);
+			f = frame(0, 0, 1);
+			step(h, f, 0, 0, false);
+			CHECK(f.d == 0 && f.bits == 0 && !h.queued().confirm);
+		}
+		{  // Up/Down in the delay move the list later; a held one stays away from the game
+			G g;
+			Frame f = frame(1);
+			step(g, f, 0);
+			f = frame(0, 0, 0, 1);
+			CHECK(step(g, f, 0, 1) == G::Event::Queued && f.v == 0 && f.bits == 0);
+			f = frame(0, 0, 0, 2);
+			step(g, f, 0, 0);
+			CHECK(f.v == 0 && f.bits == 0);
+			f = frame(0, 0, 0, -1);  // straight to the other direction: a new press
+			step(g, f, 0, -1);
+			CHECK(f.v == 0 && f.bits == 0);
+			f = frame(0, 0, 0, -2);
+			step(g, f, 0, 0);
+			f = frame(0);
+			step(g, f, 0, 0);
+			f = frame(0, 0, 0, -1);
+			step(g, f, 0, -1);
+			CHECK(g.queued().moves == -1);
+			g.observe(1);
+			f = frame(0, 0, 0, -2);
+			g.suppressHeld(f.keys(), false);  // the picker reads a held axis itself (repeats only)
+			CHECK(f.v == -2);
+			CHECK(g.take().moves == -1);
+		}
+		{  // B in the delay: passes, drops the queue, and the picker waits until it is back at the character step
+			G g;
+			Frame f = frame(1);
+			step(g, f, 0);
+			f = frame(0);
+			step(g, f, 0);
+			f = frame(1);
+			step(g, f, 0);
+			f = frame(0, 1);
+			CHECK(step(g, f, 0) == G::Event::Cancelled && f.b == 1 && f.bits == 32);
+			CHECK(!g.queued().any());
+			g.observe(1);
+			CHECK(g.inFlight());  // the B is still on its way: the picker must not drive
+			f = frame(0, 0, 0, 1);
+			step(g, f, 1, 1);
+			CHECK(f.v == 1 && f.bits == 2);  // it goes to the character step, as without the mod
+			g.observe(0);
+			CHECK(!g.inFlight() && !g.take().any());
+		}
+		{  // A, B, A in the delay: the last A leads to the palette step again, and an A after it is held back
+			G g;
+			Frame f = frame(1);
+			step(g, f, 0);
+			f = frame(0, 1);
+			step(g, f, 0);
+			f = frame(1);
+			CHECK(step(g, f, 0) == G::Event::Sent && f.a == 1);
+			f = frame(0);
+			step(g, f, 1);
+			f = frame(1);
+			CHECK(step(g, f, 1) == G::Event::Queued && f.a == 0);
+			step(g, f = frame(0), 0);
+			CHECK(g.inFlight());
+			g.observe(1);
+			CHECK(!g.inFlight() && g.take().confirm);
+		}
+		{  // a B the picker let through at the palette step
+			G g;
+			g.observe(1);
+			g.backSent();
+			CHECK(g.inFlight());
+			Frame f = frame(1);
+			CHECK(step(g, f, 1) == G::Event::Sent && f.a == 1);  // A on the character step, after the B
+			g.observe(0);
+			CHECK(g.inFlight());
+			g.observe(1);
+			CHECK(!g.inFlight());
+		}
+		{  // presses never applied: given up on, queue dropped
+			G g;
+			Frame f = frame(1);
+			step(g, f, 0);
+			step(g, f = frame(0), 0);
+			f = frame(1);
+			step(g, f, 0);  // queued
+			G::Event e = G::Event::None;
+			for (int n = 0; n <= G::TIMEOUT_FRAMES && e != G::Event::TimedOut; n++)
+				e = g.observe(0);
+			CHECK(e == G::Event::TimedOut && !g.inFlight() && !g.queued().any());
+		}
+		{  // other stages reset it; a character the picker doesn't handle doesn't start it
+			G g;
+			Frame f = frame(1);
+			step(g, f, 0);
+			g.observe(3);
+			CHECK(!g.inFlight());
+			g.observe(0);
+			f = frame(1);
+			g.observe(0);
+			CHECK(g.filter(f.keys(), 0, 0, true, false) == G::Event::None && !g.inFlight() && f.a == 1);
+		}
+	}
+
 	void testIniUpgrade()
 	{
 		std::ifstream in(std::filesystem::path(__FILE__).parent_path().parent_path() / L"PaletteShare.ini", std::ios::binary);
@@ -580,6 +762,7 @@ namespace {
 		CHECK(site::body(1, 1, value).empty());
 		CHECK(site::body(1, 1, nlohmann::json::object()).empty());
 	}
+
 }
 
 int main()
@@ -591,6 +774,7 @@ int main()
 
 	struct { const char *name; void (*run)(); } suites[] = {
 		{"sha256", testSha256}, {"base64", testBase64}, {"palettes", testPalettes}, {"protocol", testProtocol},
+		{"select guard", testSelectGuard},
 		{"replay metadata", testMetaFormat}, {"palette files", testPaletteFiles}, {"backup", testBackup},
 		{"saved palettes", testSaved}, {"ini upgrade", testIniUpgrade}, {"site report", testSiteReport}, {"fuzz", fuzz},
 	};
