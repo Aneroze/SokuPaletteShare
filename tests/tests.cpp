@@ -22,6 +22,7 @@
 #include "../src/protocol.hpp"
 #include "../src/saved.hpp"
 #include "../src/sha256.hpp"
+#include "../src/sitereport.hpp"
 
 namespace {
 	int g_failed = 0, g_checks = 0;
@@ -538,6 +539,7 @@ namespace {
 		CHECK(has(up, "Log=0\r\n") && has(up, "ForcePaletteLeft=blue.pal\r\n"));
 		CHECK(!has(up, "old comment"));
 		CHECK(has(up, "[Replay]") && has(up, "\r\nSaveMetadata=1\r\n") && !has(up, "Storage"));
+		CHECK(has(up, "[Site]") && has(up, "\r\nUpload=1\r\n") && has(up, "\r\n;Url=https://") && !has(up, "Token"));  // the new [Site] section
 		// Upgrading that again changes nothing.
 		CHECK(ini::upgraded(shipped, up, PALETTESHARE_VERSION) == up);
 
@@ -550,6 +552,33 @@ namespace {
 		CHECK(has(ini::upgraded(shipped, "[Replay]\r\nSaveMetadata=0\r\n", "1.1.0"), "\r\nSaveMetadata=0\r\n"));
 		CHECK(has(up, "\r\nSaveModifier=0x11\r\nSaveKey=0x53\r\n") && !has(up, ";SaveKey"));
 		CHECK(has(up, "Key=0x50\r\n"));  // a 1.1.0 ini without Key: the shipped line
+		// 1.1.0 had no [Site]: the upgrade adds it, on; Upload=0 set by hand later is kept.
+		up = ini::upgraded(shipped, "[Replay]\r\nSaveMetadata=0\r\n", "1.1.0");
+		CHECK(has(up, "[Site]") && has(up, "\r\nUpload=1\r\n") && has(up, "\r\nSaveMetadata=0\r\n"));
+		CHECK(has(ini::upgraded(shipped, "[Site]\r\nUpload=0\r\n", "1.1.0"), "\r\nUpload=0\r\n"));
+	}
+}
+
+namespace {
+	void testSiteReport()
+	{
+		// The replay sidecar value cut down to the reporter's own side, with the seed.
+		nlohmann::json p1 = {{"character", 0}, {"slot", 1}, {"palette", "AAAA"}};
+		nlohmann::json p2 = {{"character", 15}, {"slot", 0}, {"palette", "EAAH"}};
+		nlohmann::json value = {{"version", 1}, {"palettes", {{"p1", p1}, {"p2", p2}}}};
+		auto j = nlohmann::json::parse(site::body(3735928559u, 1, value));
+		CHECK(j.size() == 3 && j["seed"] == 3735928559u && j["reporter"] == "p2");
+		CHECK(j["PaletteShare"] == nlohmann::json({{"version", 1}, {"palettes", {{"p2", p2}}}}));
+		CHECK(nlohmann::json::parse(site::body(0, 0, value))["PaletteShare"]["palettes"] == nlohmann::json({{"p1", p1}}));
+		// Never the opponent's: our side has no palette, nothing to report.
+		value["palettes"].erase("p1");
+		CHECK(site::body(1, 0, value).empty());
+		CHECK(!site::body(1, 1, value).empty());
+		// Not a player, no palettes, or no value: nothing to report.
+		CHECK(site::body(1, -1, value).empty() && site::body(1, 2, value).empty());
+		value["palettes"] = nlohmann::json::object();
+		CHECK(site::body(1, 1, value).empty());
+		CHECK(site::body(1, 1, nlohmann::json::object()).empty());
 	}
 }
 
@@ -563,7 +592,7 @@ int main()
 	struct { const char *name; void (*run)(); } suites[] = {
 		{"sha256", testSha256}, {"base64", testBase64}, {"palettes", testPalettes}, {"protocol", testProtocol},
 		{"replay metadata", testMetaFormat}, {"palette files", testPaletteFiles}, {"backup", testBackup},
-		{"saved palettes", testSaved}, {"ini upgrade", testIniUpgrade}, {"fuzz", fuzz},
+		{"saved palettes", testSaved}, {"ini upgrade", testIniUpgrade}, {"site report", testSiteReport}, {"fuzz", fuzz},
 	};
 	for (auto &suite : suites) {
 		printf("%s\n", suite.name);

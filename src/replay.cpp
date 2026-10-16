@@ -2,6 +2,7 @@
 #include "base64.hpp"
 #include "log.hpp"
 #include "replaymeta.hpp"
+#include "sitereport.hpp"
 #include <cstring>
 #include <windows.h>
 #include <mutex>
@@ -41,12 +42,14 @@ namespace ps::replay {
 				if (e.palette && e.palette->valid())
 					palettes[SIDES[side]] = {{"character", e.charId}, {"slot", e.slot}, {"palette", base64::encode(e.palette->serialize())}};
 			}
+			nlohmann::json value = {{"version", VERSION}, {"palettes", palettes}};
+			site::offer(value);  // whatever SaveMetadata says
 			// Off: cleared rather than left alone, so a sidecar left by a deleted replay of the same
 			// name doesn't keep our data from that other match.
 			if (palettes.empty() || !g_saving)
 				meta::clearPending(KEY);
 			else
-				meta::setPending(KEY, {{"version", VERSION}, {"palettes", palettes}});
+				meta::setPending(KEY, value);
 		}
 	}
 

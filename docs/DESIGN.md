@@ -149,6 +149,20 @@ custom palette is still the one confirmed. Input bits: A 0x10 .. D 0x80, card sw
 deck)"; S opens the edit, S saves, X cancels, D does nothing while editing. Harness note: `nav d`
 is Down (case-insensitive token); a real D is `nav =d 10`.
 
+## Site reports (`src/sitereport.cpp`)
+
+soku.cleista.cc records matches as a spectator, often through relays without the mod, so it can't
+take palettes from our UDP protocol; each modded game tells it instead. Each player reports only
+their own side, so a palette reaches the site only from its owner's game, with their `Upload` on;
+spectators and replays report nothing. `replay.cpp`'s `publish()` hands every new sidecar value to
+`site::offer` (whatever `[Replay] SaveMetadata` says). Playing online only (`net::localSide()` 0/1),
+our side's entry is sent 1.5 s after the last change, once per seed and entry (the opponent's
+palette arriving later changes nothing):
+`POST <[Site] Url>` (default `https://soku.cleista.cc/api/v1/palette-share`)
+`{"seed": <gameParams.randomSeed, 0x899D50>, "reporter": "p1" | "p2", "PaletteShare": {"version": 1, "palettes": {<our side>: <its sidecar entry>}}}`.
+One WinHTTP attempt on a background thread, 5 s timeouts, failures only logged (an unusable
+`Url` once). `[Site] Upload=0`: no thread, nothing sent.
+
 ## Anti-abuse
 
 - `lockTransparency`: received colors keep, index by index, exactly the transparency of the
@@ -305,7 +319,7 @@ Reimu" `28903696…fb57`, "inverted Sanae" `5aca8185…781e`, plus a 32-bit "gre
   8 imports the C++ library brings (GetSystemTimePreciseAsFileTime, CreateFile2, CopyFile2) with
   stand-ins that fall back to older functions. Check with `dumpbin /imports` after toolset updates.
 - **Tests** (tests/tests.cpp, `tools\test.bat`): the game-free parts (sha256, base64, palette,
-  palettefile, protocol, metaformat) plus a seeded fuzz pass over every parser.
+  palettefile, protocol, metaformat, the site report body) plus a seeded fuzz pass over every parser.
 - **Okuu's cloak** (verified 2026-10-03): at 0x467B29 the game loads `paletteNNNb` instead of
   `paletteNNN` for Okuu (character 18) when configex123.ini [etc] limit=1. The two differ only at
   color 31 (the cloak's inside: magenta, drawn over by the game, vs dark navy). Every palette we
